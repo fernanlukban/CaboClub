@@ -88,3 +88,22 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 .game-log ol{padding-left:2.35rem;font-size:.875rem}
 .game-log li{padding:.3rem 0;border-bottom:1px solid var(--edge)}
 .game-log textarea{width:100%;margin-bottom:.5rem;background:#102a24;color:var(--ink)}
+
+/* Each seat's local baseline faces the player at that edge of the table. */
+.tabletop{--side-length:clamp(7rem,29vmin,15rem);grid-template-rows:auto minmax(var(--side-length),auto) auto}
+.tabletop-seat{border:0;background:transparent;padding:0}
+.tabletop-seat.current{background:transparent}
+.tabletop-seat-content{display:grid;justify-items:center;gap:.22rem;width:100%;min-width:0;padding:clamp(4px,1vmin,10px);border:1px solid var(--edge);border-radius:9px;background:#102a23b8}
+.tabletop-seat.current .tabletop-seat-content{border-color:var(--gold);background:#304936}
+.tabletop-seat.north .tabletop-seat-content{transform:rotate(180deg)}
+.tabletop-seat.west .tabletop-seat-content{width:var(--side-length);transform:rotate(90deg)}
+.tabletop-seat.east .tabletop-seat-content{width:var(--side-length);transform:rotate(-90deg)}
+.tabletop-hand{container-type:inline-size;flex-wrap:nowrap;--hand-gap:min(2px,calc(18vmin / var(--cards)));gap:var(--hand-gap)}
+.tabletop-hand .card{--card-width:min(clamp(18px,5.1vmin,44px),calc(100cqw / var(--cards) - var(--hand-gap)));font-size:min(1.4rem,calc(var(--card-width) * .48))}
+.card-corners{position:absolute;inset:0;pointer-events:none;font:700 clamp(4px,.43em,12px)/1 system-ui,sans-serif}
+.card-corners span{position:absolute}
+.card-corners span:nth-child(1){top:8%;left:8%}
+.card-corners span:nth-child(2){top:8%;right:8%;transform:rotate(90deg)}
+.card-corners span:nth-child(3){bottom:8%;right:8%;transform:rotate(180deg)}
+.card-corners span:nth-child(4){bottom:8%;left:8%;transform:rotate(-90deg)}
+.actions select{background:#102a24;color:var(--ink);border:1px solid var(--edge);border-radius:7px;min-height:44px;padding:.6rem}

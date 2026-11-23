@@ -23,6 +23,7 @@ let session = readSession(key);
 if (room && session?.room !== room) session = null;
 let snapshot;
 let selection = [];
+let starterSeat;
 let testRoomsEnabled = false;
 let dismissedSwap;
 let busy = false;
@@ -50,6 +51,7 @@ const errors = {
   invalidName:"Enter a name with 1 to 22 characters.",roomUnavailable:"This room is full or already playing.",
   invalidPairing:"That board pairing code has expired or is incorrect.",roomNotFound:"This room has expired or does not exist.",
   invalidSession:"Your session ended. Join again to continue.",actionUnavailable:"That move is unavailable now.",
+  seatTaken:"That direction is taken. Choose another seat.",
   staleTest:"This test was already restarted.",
   stalePower:"That power has changed. Check the current selection.",
   invalidSeed:"Enter a whole-number seed between 0 and 18446744073709551615.",
@@ -98,7 +100,7 @@ function accept(next, force = false, renderNow = true) {
     return;
   }
   if (!force && snapshot && next.roomId === snapshot.roomId && next.revision <= snapshot.revision) return;
-  if (snapshot && snapshot.dealId !== next.dealId) { selection = []; }
+  if (snapshot && snapshot.dealId !== next.dealId) { selection = []; starterSeat = undefined; }
   const allowed = selectable(next);
   selection = selection.filter(slot => allowed.has(slot));
   animateTabletopSwap = mode==="board" && snapshot?.pendingPower?.phase==="swapReview"
@@ -184,7 +186,7 @@ async function submit(choice, explicitSlots) {
   finally { busy = false; render(); }
 }
 function leave(message = "") {
-  save(null); snapshot = undefined; selection = []; pairing = ""; tableControlsOpen = false; notice = message;
+  save(null); snapshot = undefined; selection = []; starterSeat = undefined; pairing = ""; tableControlsOpen = false; notice = message;
   page = "home";
   const url = new URL(location.href);
   url.searchParams.delete("room");
@@ -222,11 +224,15 @@ function home() {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const room = String(data.get("room") ?? "").trim().toUpperCase();
-    if (creating) connect("/api/rooms",{board:false,name:data.get("name")});
+    const direction = data.get("direction") || null;
+    if (creating) connect("/api/rooms",{board:false,name:data.get("name"),direction});
     else if (mode === "board") connect(`/api/rooms/${encodeURIComponent(room)}/board`,{code:data.get("code")});
-    else connect(`/api/rooms/${encodeURIComponent(room)}/join`,{name:data.get("name")});
+    else connect(`/api/rooms/${encodeURIComponent(room)}/join`,{name:data.get("name"),direction});
   }},creating?null:field("Room code","room",query.get("room") || "",8),
     mode==="board"?field("Board pairing code","code","",10):field("Your name","name"),
+    mode==="player"?node("label",{},"Seat direction",node("select",{name:"direction"},
+      node("option",{value:""},"Any open seat"),
+      ...directions.map(direction=>node("option",{value:direction},directionLabel(direction))))):null,
     node("button",{type:"submit",class:"primary",disabled:busy},creating?"Create room":"Join room"));
   return node("section",{class:"home"},brand,node("h2",{},creating?"Create a game":"Join a game"),form,
     notice?node("p",{role:"status"},notice):null,button("Back",()=>navigate("home")));
@@ -292,7 +298,10 @@ function card(view, index = 0, action, selected = false, name) {
     "aria-label": name || `Card ${index+1}${face?", rank "+rank:", face down"}`,
     style:`--index:${index}`,
     "data-sprite":view?.slot === undefined ? (name ?? `card-${index}`) : String(view.slot),
-  },node("span",{class:"card-inner"},view?(face?String(rank):"✦"):"—"));
+  },node("span",{class:"card-inner","aria-hidden":"true"},view?(face?String(rank):"✦"):"—"),
+    face?node("span",{class:"card-corners","aria-hidden":"true"},
+      ...[0,1,2,3].map(()=>node("span",{},String(rank)))):null);
+
 }
 function piles(interactive = false) {
   const draw = snapshot.availableActions.find(x=>x.action==="drawDeck");
@@ -336,6 +345,22 @@ function actionStrip(filter = () => true) {
   return node("div",{class:"actions"},...visible.map(choice=>{
     let label = labels[choice.action];
     if (choice.action==="beginPlay" && snapshot.round>1) label="Start round";
+    if (choice.action==="beginPlay" && choice.max) {
+      const candidates = directions.flatMap(direction=>snapshot.players.filter(player=>
+        player.direction===direction && choice.slots.includes(player.seatId)));
+      const selected = candidates.length===1 ? candidates[0].seatId : starterSeat;
+      const picker = node("select",{"aria-label":"Starting player",disabled:busy},
+        node("option",{value:""},"Choose who starts"),
+        ...candidates.map(player=>node("option",{value:player.seatId},
+          `${directionLabel(player.direction)} · ${player.name}`)));
+      picker.value = selected ?? "";
+      picker.addEventListener("change",()=>{
+        starterSeat = Number(picker.value) || undefined;
+        render();
+      });
+      return node("div",{class:"actions"},picker,
+        button(label,()=>submit(choice,[selected]),true,busy||!choice.slots.includes(selected)));
+    }
     if (choice.action==="useDrawnPower") {
       const rank = snapshot.incoming?.rank;
       label = rank>=11?"Use Swap":rank>=9?"Use Spy":"Use Peek";
@@ -363,7 +388,8 @@ function summary(showCards = false) {
       showCards?node("div",{class:"result-cards"},...p.cards.map((item,index)=>card(item,index))):null);
   }));
 }
-const directions = ["south", "north", "west", "east"];
+const directions = ["north", "west", "south", "east"];
+const directionLabel = direction=>direction[0].toUpperCase()+direction.slice(1);
 
 function powerPrompt() {
   const pending = snapshot.pendingPower;
@@ -405,25 +431,25 @@ function powerToast() {
 
 function tabletop(center) {
   const targetChoice = snapshot.availableActions.find(choice=>choice.action==="stagePowerTarget");
-  return node("div",{class:"tabletop"},...directions.map((direction,index)=>{
-    const player = snapshot.players[index];
-    const ready = ["initialPreview","readyToStart"].includes(snapshot.phase);
+  const activePlayer = snapshot.players.find(player=>player.seatId===snapshot.turnSeatId);
+  return node("div",{class:"tabletop"},...directions.map(direction=>{
+    const player = snapshot.players.find(seat=>seat.direction===direction);
     const current = player && player.seatId===snapshot.turnSeatId;
     const result = snapshot.results.find(item=>item.seatId===player?.seatId);
-    const description = player ? [
-      `${player.score} points`,
-      ready?(player.ready?"Ready":"Looking"):null,
-      current?"Current turn":null,
-      result?`+${result.points} this round`:null,
-    ].filter(Boolean).join(" · ") : null;
+    const roundStatus = powerPrompt() || (current ? "Your turn" : activePlayer ? `${activePlayer.name}’s turn` :
+      snapshot.phase==="initialPreview" ? (player?.ready ? "Ready · waiting for others" : "Opening look") :
+      snapshot.phase==="readyToStart" ? "Ready to start" :
+      snapshot.phase==="roundResults" ? "Round results" :
+      snapshot.phase==="gameOver" ? "Game over" : "Lobby");
     return node("section",{class:`tabletop-seat ${direction} ${current?"current":""}`,"aria-label":`${direction} seat`},
-      node("strong",{},player?.name ?? "Open seat"),
-      description?node("small",{},description):null,
-      player?.cards.length?node("div",{class:"tabletop-hand"},
-        ...player.cards.map((item,index)=>card(item,index,
-          targetChoice?.slots.includes(item.slot)?()=>submit(targetChoice,[item.slot]):null,
-          snapshot.pendingPower?.targetSlot===item.slot,
-          `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}`))):null);
+      node("div",{class:"tabletop-seat-content"},
+        player?.cards.length?node("div",{class:"tabletop-hand",style:`--cards:${player.cards.length}`},
+          ...player.cards.map((item,index)=>card(item,index,
+            targetChoice?.slots.includes(item.slot)?()=>submit(targetChoice,[item.slot]):null,
+            snapshot.pendingPower?.targetSlot===item.slot,
+            `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}`))):null,
+        node("strong",{},player?.name ?? `${directionLabel(direction)} · Open seat`),
+        player?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null));
   }),node("div",{class:"tabletop-center"},center));
 }
 

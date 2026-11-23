@@ -12,11 +12,11 @@ Two to four players can open a browser, create a private table or join via an in
 
 ## Game lifecycle
 
-1. Create a room, return a shareable code and a separate private seat credential, then allow up to four seats while the lobby is open.
+1. Create a room with a shareable code. Each player can pick North, West, South, East, or any open seat from the join screen. Reject an occupied direction and keep the assigned direction with the private seat credential.
 2. Deal four hidden cards per player with at least two players present. Each player privately chooses two of their four cards to look at and confirms before the board begins play. Show the discard pile's top card and the number of cards left in the deck.
 3. On a player's turn, allow a legal draw, discard, exchange, special ability, or Cabo call. Apply exchanges and their penalties atomically. Deck cards 7–8 allow Peek, 9–10 allow Spy, and 11–12 allow Swap. A Cabo call grants every other player one final turn. Deck exhaustion ends the round.
 4. Reveal hands at round end. A caller tied for the lowest hand scores zero. Otherwise the caller adds ten to their hand total. A hand of 12, 12, 13, 13 scores zero and awards each opponent 50. Exactly 100 resets a player's total to 50 once per game. A total above 100 ends the game and the lowest total wins, with last-round points breaking ties where possible.
-5. The host or room-creating board deals the next round or a new game after completion. Preserve the deployed app's detailed match, penalty, turn order, and scoring behavior in regression cases during the port.
+5. The host or room-creating board deals the next round or a new game after completion. The board chooses the first player of a new game. The lowest round score starts the following round. Break a tie by taking the first tied seat counterclockwise after the previous starter. Normal turns and Cabo final turns run counterclockwise through occupied seats in North, West, South, East order. Preserve the deployed app's detailed match, penalty, turn order, and scoring behavior in regression cases during the port.
 
 ## Round-start state machine
 
@@ -77,8 +77,9 @@ Create, join, load or resume, poll, and authenticated command responses return a
 | `protocolVersion`, `roomId`, `revision` | Wire compatibility, room instance identity, and a monotonically increasing room revision |
 | `roomCode`, `youSeatId`, `hostSeatId` | Invite code, requesting seat, and host |
 | `phase`, `round`, `turnSeatId` | Lobby, initial preview, ready to start, active round, round results, or game over, plus the current turn when applicable |
+| `nextStarterSeatId` | Previous round winner when another round is available. |
 | `dealId` and player `ready` | Deal identifier and per-seat readiness during setup. Only the requesting seat sees its own preview values while revealed. |
-| `players`, `deckCount`, `discardTop` | Ordered seats, scores, card slots and visible values, deck count, and discard top |
+| `players`, `deckCount`, `discardTop` | Seat directions, scores, card slots and visible values, deck count, and discard top |
 | `incoming`, `finalTurns`, `results` | Player-visible draw or power state, Cabo caller and remaining turns, and round or game results as applicable |
 | `availableActions` | Actions this seat can submit at this revision, including the choices each action accepts |
 
@@ -96,7 +97,7 @@ Use stable, tagged action kinds and typed parameters. Each descriptor carries an
 | `cancelSetup` | Host only, in setup. Identifies the current deal. |
 | `revealInitialCards` | Current deal, with exactly two distinct slot references from the server-provided list of the requesting seat's four starting slots. |
 | `confirmInitialLook` | Current deal. The requesting seat must already have revealed a pair. |
-| `beginPlay` | Current deal. Available after all seats confirm to the authorized board or to the host if no board is authorized. |
+| `beginPlay` | Current deal. A new game takes one starter seat ID chosen from this action’s slots. Later rounds use the server-selected winner and take no slots. Available after all seats confirm to the authorized board or to the host if no board is authorized. |
 | `drawDeck`, `drawDiscard` | No parameters. Each appears when the corresponding pile can be taken. |
 | `discardDrawn`, `useDrawnPower`, `callCabo` | No parameters. For a power, include the power kind visible to the acting player. |
 | `discardHandCard` | One selectable existing hand slot to trade for the current incoming card. |

@@ -6,8 +6,8 @@ use std::{
 use cabo_shared::{
     game::{self, MAX_PLAYERS, MIN_PLAYERS, STARTING_HAND_SIZE, cabo_power::Power},
     protocol::{
-        Action, CardView, Choice, Command, MatchOutcome, PendingPower, PlayerView, PowerResult,
-        RoundResult, Snapshot, TestScenario, TestView,
+        Action, CardView, Choice, Command, Direction, MatchOutcome, PendingPower, PlayerView,
+        PowerResult, RoundResult, Snapshot, TestScenario, TestView,
     },
     round_start::{Phase as SetupPhase, Preview, RoundStart},
 };
@@ -32,6 +32,7 @@ impl Card {
 
 struct Player {
     id: u64,
+    direction: Direction,
     token: String,
     name: String,
     hand: Vec<Card>,
@@ -330,7 +331,11 @@ impl Room {
         self.creator.as_deref()
     }
 
-    pub fn join(&mut self, name: &str) -> Result<String, &'static str> {
+    pub fn join(
+        &mut self,
+        name: &str,
+        requested: Option<Direction>,
+    ) -> Result<String, &'static str> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 22 {
             return Err("invalidName");
@@ -338,11 +343,23 @@ impl Room {
         if self.phase != Phase::Lobby || self.players.len() >= MAX_PLAYERS {
             return Err("roomUnavailable");
         }
+        let mut open = Direction::DEFAULT_SEATS.into_iter().filter(|direction| {
+            !self
+                .players
+                .iter()
+                .any(|player| player.direction == *direction)
+        });
+        let direction = match requested {
+            Some(direction) if open.any(|available| available == direction) => direction,
+            Some(_) => return Err("seatTaken"),
+            None => open.next().ok_or("roomUnavailable")?,
+        };
         let before = self.log_state();
         let token = secret();
         let seat = self.players.len() as u64 + 1;
         self.players.push(Player {
             id: self.players.len() as u64 + 1,
+            direction,
             token: token.clone(),
             name: name.into(),
             hand: vec![],
@@ -351,9 +368,15 @@ impl Room {
             bot: false,
         });
         if self.test.is_some() {
-            for index in 1..MAX_PLAYERS {
+            for (index, direction) in Direction::DEFAULT_SEATS
+                .into_iter()
+                .filter(|&candidate| candidate != direction)
+                .enumerate()
+            {
+                let index = index + 1;
                 self.players.push(Player {
                     id: index as u64 + 1,
+                    direction,
                     token: secret(),
                     name: format!("Bot {index}"),
                     hand: vec![],
@@ -414,6 +437,23 @@ impl Room {
         }
     }
 
+    fn choosing_starter(&self) -> bool {
+        self.round_number == 0
+            || self.phase == Phase::Finished
+            || self.players.iter().any(|player| player.score > 100)
+    }
+
+    fn counterclockwise_seat_indexes(&self, from: usize) -> impl Iterator<Item = usize> + '_ {
+        self.players[from]
+            .direction
+            .counterclockwise_from()
+            .filter_map(|direction| {
+                self.players
+                    .iter()
+                    .position(|player| player.direction == direction)
+            })
+    }
+
     pub fn actions(&self, role: Role) -> Vec<Choice> {
         use Action::*;
         let mut choices = vec![];
@@ -451,7 +491,20 @@ impl Room {
                 && (matches!(role, Role::Board | Role::CreatorBoard)
                     || (host && self.board.is_none() && self.creator.is_none()))
             {
-                choices.push(Choice::button(BeginPlay));
+                if self.choosing_starter() {
+                    let drill = self.test.as_ref().is_some_and(|test| {
+                        matches!(test.scenario, TestScenario::Spy | TestScenario::Swap)
+                    });
+                    let starters = self
+                        .players
+                        .iter()
+                        .filter(|player| !drill || !player.bot)
+                        .map(|player| player.id as u32)
+                        .collect();
+                    choices.push(Choice::select(BeginPlay, starters, 1, 1));
+                } else {
+                    choices.push(Choice::button(BeginPlay));
+                }
             }
             if let Role::Seat(index) = role {
                 let player = &self.players[index];
@@ -740,11 +793,19 @@ impl Room {
                 "A player is ready."
             }
             BeginPlay => {
+                let choose = self.choosing_starter();
+                let starter = command.slots.first().map(|&id| {
+                    self.players
+                        .iter()
+                        .position(|player| player.id == u64::from(id))
+                        .unwrap()
+                });
                 let round = self.round.as_mut().unwrap();
                 round.opening.begin_play().map_err(|_| "notReady")?;
-                if self.round_number == 0 || self.players.iter().any(|p| p.score > 100) {
+                if choose {
                     self.round_number = 0;
-                    self.starter = 0;
+                    self.starter = starter.unwrap();
+                    round.turn = self.starter;
                     for p in &mut self.players {
                         p.score = 0;
                         p.reset = false;
@@ -875,6 +936,10 @@ impl Room {
 
     fn play(&mut self, seat: usize, command: &Command) -> &'static str {
         use Action::*;
+        let turn_order: Vec<_> = self
+            .counterclockwise_seat_indexes(seat)
+            .filter(|&index| index != seat)
+            .collect();
         self.swap_receipts[seat] = None;
         let round = self.round.as_mut().unwrap();
         let incoming = match round.step {
@@ -982,9 +1047,7 @@ impl Room {
             }
             CallCabo => {
                 round.caller = Some(seat);
-                round.final_turns = (1..self.players.len())
-                    .map(|offset| (seat + offset) % self.players.len())
-                    .collect();
+                round.final_turns = turn_order.iter().copied().collect();
                 "Cabo called. Everyone else gets one final turn."
             }
             UseDrawnPower => {
@@ -1083,15 +1146,12 @@ impl Room {
                 "The round is complete."
             };
         }
-        round.turn = round
-            .final_turns
-            .front()
-            .copied()
-            .unwrap_or((seat + 1) % self.players.len());
+        round.turn = round.final_turns.front().copied().unwrap_or(turn_order[0]);
         note
     }
 
     fn score(&mut self) {
+        let order: Vec<_> = self.counterclockwise_seat_indexes(self.starter).collect();
         let round = self.round.as_mut().unwrap();
         let hands: Vec<_> = self
             .players
@@ -1106,9 +1166,8 @@ impl Room {
                 p.reset = true;
             }
         }
-        let previous = self.starter;
-        self.starter = (1..=self.players.len())
-            .map(|offset| (previous + offset) % self.players.len())
+        self.starter = order
+            .into_iter()
             .min_by_key(|&i| round.results[i].1)
             .unwrap();
         self.phase = if self.players.iter().any(|p| p.score > 100) {
@@ -1145,7 +1204,7 @@ impl Room {
                     && matches!(preview, Some(Preview::Revealed(positions)) if positions.contains(&j));
                 c.view(public || opening)
             }).collect();
-            PlayerView { seat_id:p.id, name:p.name.clone(), score:p.score,
+            PlayerView { seat_id:p.id, direction:p.direction, name:p.name.clone(), score:p.score,
                 ready: self.phase == Phase::Setup && preview == Some(Preview::Confirmed), bot:p.bot, cards }
         }).collect();
         let incoming = round.and_then(|r| {
@@ -1253,6 +1312,9 @@ impl Room {
             turn_seat_id: round
                 .filter(|_| self.phase == Phase::Playing)
                 .map(|r| self.players[r.turn].id),
+            next_starter_seat_id: (self.phase == Phase::Results
+                || (self.phase == Phase::Setup && !self.choosing_starter()))
+            .then(|| self.players[self.starter].id),
             players,
             deck_count: round.map_or(0, |r| r.deck.len()),
             discard_top: round.and_then(|r| r.discard.last()).map(|c| c.rank),
@@ -1318,8 +1380,8 @@ mod tests {
 
     fn setup() -> Room {
         let mut room = Room::new("TESTROOM".into(), true);
-        room.join("Alex").unwrap();
-        room.join("Bea").unwrap();
+        room.join("Alex", None).unwrap();
+        room.join("Bea", None).unwrap();
         run(&mut room, Role::CreatorBoard, Action::DealRound, vec![]);
         room
     }
@@ -1331,12 +1393,12 @@ mod tests {
             run(room, Role::Seat(index), Action::ConfirmInitialLook, vec![]);
         }
         let host = room.players[0].token.clone();
-        let phone_start = command(room, "phone-start", Action::BeginPlay, vec![]);
+        let phone_start = command(room, "phone-start", Action::BeginPlay, vec![1]);
         assert_eq!(
             room.command(&host, Role::Seat(0), phone_start),
             Err("actionUnavailable")
         );
-        run(room, Role::CreatorBoard, Action::BeginPlay, vec![]);
+        run(room, Role::CreatorBoard, Action::BeginPlay, vec![1]);
         assert!(
             room.actions(Role::CreatorBoard)
                 .iter()
@@ -1351,7 +1413,7 @@ mod tests {
     fn board_cannot_start_early_and_confirmed_ranks_stay_hidden_on_replay() {
         let mut room = setup();
         let board = room.creator.clone().unwrap();
-        let start = command(&room, "early", Action::BeginPlay, vec![]);
+        let start = command(&room, "early", Action::BeginPlay, vec![1]);
         assert_eq!(
             room.command(&board, Role::CreatorBoard, start),
             Err("actionUnavailable")
@@ -1489,7 +1551,7 @@ mod tests {
     fn bot_room_restarts_with_original_seed_and_sessions() {
         let mut room = Room::new("BOTS".into(), true);
         room.enable_test(TestScenario::Spy, 42);
-        let player = room.join("Avery").unwrap();
+        let player = room.join("Avery", None).unwrap();
         let board = room.creator.clone().unwrap();
         assert_eq!(room.players.iter().filter(|player| player.bot).count(), 3);
         run(&mut room, Role::CreatorBoard, Action::DealRound, vec![]);
@@ -1524,6 +1586,91 @@ mod tests {
                 .map(|c| c.rank)
                 .collect::<Vec<_>>(),
             original
+        );
+    }
+
+    #[test]
+    fn explicit_seats_follow_counterclockwise_cabo_and_round_winner_starts() {
+        let mut room = Room::new("COMPASS".into(), true);
+        for (name, direction) in [
+            ("East", Direction::East),
+            ("South", Direction::South),
+            ("North", Direction::North),
+            ("West", Direction::West),
+        ] {
+            room.join(name, Some(direction)).unwrap();
+        }
+        assert_eq!(
+            room.counterclockwise_seat_indexes(2).collect::<Vec<_>>(),
+            [3, 1, 0, 2]
+        );
+        let ready = |room: &mut Room| {
+            for index in 0..4 {
+                let pair = slots(&room.players[index])[..2].to_vec();
+                run(room, Role::Seat(index), Action::RevealInitialCards, pair);
+                run(room, Role::Seat(index), Action::ConfirmInitialLook, vec![]);
+            }
+        };
+        run(&mut room, Role::CreatorBoard, Action::DealRound, vec![]);
+        ready(&mut room);
+        let board = room.creator.clone().unwrap();
+        let missing = command(&room, "missing", Action::BeginPlay, vec![]);
+        assert_eq!(
+            room.command(&board, Role::CreatorBoard, missing),
+            Err("invalidSelection")
+        );
+        run(&mut room, Role::CreatorBoard, Action::BeginPlay, vec![3]);
+        assert_eq!(room.round.as_ref().unwrap().turn, 2);
+        run(&mut room, Role::Seat(2), Action::DrawDeck, vec![]);
+        run(&mut room, Role::Seat(2), Action::DiscardDrawn, vec![]);
+        assert_eq!(room.round.as_ref().unwrap().turn, 3);
+        run(&mut room, Role::Seat(3), Action::CallCabo, vec![]);
+        assert_eq!(
+            room.round
+                .as_ref()
+                .unwrap()
+                .final_turns
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [1, 0, 2]
+        );
+        for (index, player) in room.players.iter_mut().enumerate() {
+            for card in &mut player.hand {
+                card.rank = if index == 0 { 1 } else { 5 };
+            }
+        }
+        for index in [1, 0, 2] {
+            assert_eq!(room.round.as_ref().unwrap().turn, index);
+            run(&mut room, Role::Seat(index), Action::DrawDeck, vec![]);
+            run(&mut room, Role::Seat(index), Action::DiscardDrawn, vec![]);
+        }
+        assert_eq!(
+            room.snapshot(Role::CreatorBoard).next_starter_seat_id,
+            Some(1)
+        );
+        run(&mut room, Role::CreatorBoard, Action::DealNextRound, vec![]);
+        ready(&mut room);
+        run(&mut room, Role::CreatorBoard, Action::BeginPlay, vec![]);
+        assert_eq!(room.round.as_ref().unwrap().turn, 0);
+    }
+
+    #[test]
+    fn assigned_compass_seats_are_unique_and_skip_open_directions() {
+        let mut room = Room::new("TWO".into(), true);
+        room.join("West", Some(Direction::West)).unwrap();
+        assert_eq!(
+            room.join("Another West", Some(Direction::West)),
+            Err("seatTaken")
+        );
+        room.join("East", Some(Direction::East)).unwrap();
+        assert_eq!(
+            room.counterclockwise_seat_indexes(0).collect::<Vec<_>>(),
+            [1, 0]
+        );
+        assert_eq!(
+            room.snapshot(Role::CreatorBoard).players[0].direction,
+            Direction::West
         );
     }
 
@@ -1570,7 +1717,7 @@ mod tests {
         for seed in 0..128 {
             let mut room = Room::new("FUZZ".into(), true);
             room.enable_test(TestScenario::Random, seed);
-            room.join("Human").unwrap();
+            room.join("Human", None).unwrap();
             run(&mut room, Role::CreatorBoard, Action::DealRound, vec![]);
             start(&mut room);
             let mut rng = StdRng::seed_from_u64(seed);
@@ -1684,7 +1831,7 @@ mod tests {
             );
         }
         run(&mut room, Role::Seat(0), Action::RevokeBoard, vec![]);
-        run(&mut room, Role::Seat(0), Action::BeginPlay, vec![]);
+        run(&mut room, Role::Seat(0), Action::BeginPlay, vec![1]);
         run(&mut room, Role::Seat(0), Action::CallCabo, vec![]);
         let discard = room.round.as_ref().unwrap().discard.last().unwrap().slot;
         let hand = slots(&room.players[1]);

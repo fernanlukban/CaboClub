@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use cabo_shared::protocol::{Command, Snapshot, TestScenario};
+use cabo_shared::protocol::{Command, Direction, Snapshot, TestScenario};
 use game::{Room, secret};
 use qrcode::{QrCode, render::svg};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,7 @@ type Rooms = Arc<Mutex<HashMap<String, Room>>>;
 struct Create {
     board: bool,
     name: Option<String>,
+    direction: Option<Direction>,
     test_scenario: Option<TestScenario>,
     seed: Option<String>,
 }
@@ -35,6 +36,7 @@ struct Create {
 #[derive(Deserialize)]
 struct Join {
     name: String,
+    direction: Option<Direction>,
 }
 
 #[derive(Deserialize)]
@@ -134,7 +136,7 @@ async fn create(
     let token = if input.board {
         room.creator_token().unwrap().to_owned()
     } else {
-        room.join(input.name.as_deref().unwrap_or_default())
+        room.join(input.name.as_deref().unwrap_or_default(), input.direction)
             .map_err(|err| bad(StatusCode::BAD_REQUEST, err))?
     };
     let snapshot = room.snapshot(room.role(&token).unwrap());
@@ -150,7 +152,7 @@ async fn join(
     let mut rooms = state.lock().await;
     let room = room_mut(&mut rooms, &code)?;
     let token = room
-        .join(&input.name)
+        .join(&input.name, input.direction)
         .map_err(|err| bad(StatusCode::CONFLICT, err))?;
     Ok(Json(Session {
         snapshot: room.snapshot(room.role(&token).unwrap()),

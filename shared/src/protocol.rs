@@ -86,10 +86,33 @@ pub struct CardView {
     pub rank: Option<u8>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Direction {
+    North,
+    West,
+    South,
+    East,
+}
+
+impl Direction {
+    pub const COUNTERCLOCKWISE: [Self; 4] = [Self::North, Self::West, Self::South, Self::East];
+    pub const DEFAULT_SEATS: [Self; 4] = [Self::South, Self::North, Self::West, Self::East];
+
+    pub fn counterclockwise_from(self) -> impl Iterator<Item = Self> {
+        let start = Self::COUNTERCLOCKWISE
+            .iter()
+            .position(|&direction| direction == self)
+            .unwrap();
+        (1..=4).map(move |offset| Self::COUNTERCLOCKWISE[(start + offset) % 4])
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerView {
     pub seat_id: u64,
+    pub direction: Direction,
     pub name: String,
     pub score: u16,
     pub ready: bool,
@@ -167,6 +190,7 @@ pub struct Snapshot {
     pub round: u32,
     pub deal_id: Option<u64>,
     pub turn_seat_id: Option<u64>,
+    pub next_starter_seat_id: Option<u64>,
     pub players: Vec<PlayerView>,
     pub deck_count: usize,
     pub discard_top: Option<u8>,
