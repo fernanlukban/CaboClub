@@ -2,7 +2,7 @@
 
 ## Goal
 
-Two to four players can open a browser, create a private table or join via an invite, and play a full Cabo game. The host starts the game and opens subsequent rounds. Players keep their seat when reconnecting with a valid session.
+Two to four players can open a browser, create a private table or join via an invite, and play a full Cabo game. The host deals rounds. A paired board or the host begins play once every player confirms their opening look. Players keep their seat when reconnecting with a valid session.
 
 ## Ownership
 
@@ -13,10 +13,34 @@ Two to four players can open a browser, create a private table or join via an in
 ## Game lifecycle
 
 1. Create a room, return a shareable code and a separate private seat credential, then allow up to four seats while the lobby is open.
-2. The host starts with at least two players. Deal four hidden cards per player and privately reveal the first two to their owner. Show the discard pile's top card and the number of cards left in the deck.
+2. The host deals four hidden cards per player with at least two players present. Each player privately looks at their first two cards and confirms before the board or host begins play. Show the discard pile's top card and the number of cards left in the deck.
 3. On a player's turn, allow a legal draw, discard, exchange, special ability, or Cabo call. Apply exchanges and their penalties atomically. Deck cards 7–8 allow Peek, 9–10 allow Spy, and 11–12 allow Swap. A Cabo call grants every other player one final turn. Deck exhaustion ends the round.
 4. Reveal hands at round end. A caller tied for the lowest hand scores zero. Otherwise the caller adds ten to their hand total. A hand of 12, 12, 13, 13 scores zero and awards each opponent 50. Exactly 100 resets a player's total to 50 once per game. A total above 100 ends the game and the lowest total wins, with last-round points breaking ties where possible.
-5. The host starts the next round or a new game after completion. Preserve the deployed app's detailed match, penalty, turn order, and scoring behavior in regression cases during the port.
+5. The host deals the next round or a new game after completion. Preserve the deployed app's detailed match, penalty, turn order, and scoring behavior in regression cases during the port.
+
+## Round-start state machine
+
+The host deals and the table starts play in two separate steps. Use the same flow for the first and subsequent rounds, with or without a board.
+
+| State | Event and guard | Result |
+| --- | --- | --- |
+| `lobby`, `roundResults`, or `gameOver` | Host selects **Deal cards**, **Deal next round**, or **New game**, respectively. Require two to four seats. | Freeze the round roster, deal once, reset readiness, and enter `initialPreview`. There is no active turn yet. |
+| `initialPreview` | A seated player selects **Look at my cards**. | Reveal that seat's two starting cards in its private snapshot. A reconnect before confirmation resumes the reveal. |
+| `initialPreview` | The same player selects **I've looked** after revealing. | Record readiness and hide that seat's opening preview values. When every seat has confirmed, enter `readyToStart`. |
+| `readyToStart` | The paired board or host selects **Start game** for round one or **Start round** for later rounds. | Enter `playing` and set the first turn in the same mutation. |
+| `playing` | A legal move ends the round under the Cabo or deck exhaustion rules. | Score once and enter `roundResults` or `gameOver`. |
+
+The board displays readiness by seat. It shows its start button only when the server includes `beginPlay` in the board action list. The host phone retains the same start action so a missing or disconnected board cannot block play. The board never sees the opening card values or generates player confirmations. **I've looked** is an explicit player acknowledgment. The server can verify that a reveal occurred, and the player confirms that they saw it.
+
+Keep the frozen roster and each seat's preview status in server state. Connection changes neither confirm a seat nor remove it from readiness. If a seat cannot return during the first-round preview, the host can cancel setup and return to the lobby. After a later deal, cancel back to the last results without changing completed scores. Discard the abandoned deal and readiness in both cases. In the first playable version, a confirmed seat remains ready until that setup is canceled or play begins.
+
+### Transition and retry invariants
+
+- Use an explicit phase and per-seat preview state. Derive action descriptors and validate commands from the same guards. No turn actions during setup, no player joins after dealing, and no start until every frozen seat confirms.
+- Serialize mutations per room. Authenticate the current credential, check command replay, then validate the revision, phase, role, and targets. Two simultaneous starts cause one transition. A stale request returns the latest role-scoped snapshot so the client can refresh and resubmit intentionally.
+- Scope setup to a unique deal instance. A delayed reveal, confirmation, start, or cancel from an abandoned deal cannot mutate a replacement. A retry of a committed deal returns the result of that deal without drawing cards again.
+- During play, model each turn as awaiting a draw or Cabo call, resolving a draw, or resolving a power. Validate actor, action, and targets before committing. A resolved move advances at most one turn. Keep Cabo's remaining seats explicit and score at most once per round, including if deck exhaustion and the last final turn coincide.
+- Cover early start, confirmation before reveal, reconnect before and after confirmation, duplicate requests, overlapping start from two devices, stale commands after cancel, and board credential misuse. In gameplay tests, exercise wrong-seat moves and one-time scoring after Cabo and deck exhaustion.
 
 ## Client/server boundary
 
@@ -30,7 +54,8 @@ Create, join, load or resume, poll, and authenticated command responses return a
 | --- | --- |
 | `protocolVersion`, `roomId`, `revision` | Wire compatibility, room instance identity, and a monotonically increasing room revision |
 | `roomCode`, `youSeatId`, `hostSeatId` | Invite code, requesting seat, and host |
-| `phase`, `round`, `turnSeatId` | Lobby, active round, round results, or game over, plus current turn when applicable |
+| `phase`, `round`, `turnSeatId` | Lobby, initial preview, ready to start, active round, round results, or game over, plus the current turn when applicable |
+| `setup` | Deal identifier and per-seat readiness during setup. Only the requesting seat sees its own preview values while revealed. |
 | `players`, `table` | Ordered seats, scores, card slots and visible values, deck count, and discard top |
 | `pendingMove`, `finalTurns`, `results` | Player-visible draw or power state, Cabo caller and remaining turns, and round or game results as applicable |
 | `availableActions` | Actions this seat can submit at this revision, including the choices each action accepts |
@@ -45,7 +70,9 @@ Use stable, tagged action kinds and typed parameters. Each descriptor carries an
 
 | Action kind | Choices supplied by the server |
 | --- | --- |
-| `startRound`, `nextRound`, `restartGame` | No parameters. Available only to the host in the applicable phase. |
+| `dealRound`, `dealNextRound`, `dealNewGame`, `cancelSetup` | Host only, in the applicable phase. Cancellation identifies the current deal. |
+| `revealInitialCards`, `confirmInitialLook` | Seated player only, for their own preview in the current deal. |
+| `beginPlay` | Current deal. Available to the paired board and host only after all seats confirm. |
 | `draw` | Currently available piles, such as `deck` or `discard`. |
 | `discardDrawn`, `useDrawnPower`, `callCabo` | No parameters. For a power, include the power kind visible to the acting player. |
 | `exchange` | Selectable own card slots, minimum and maximum selection counts, and valid insertion sides for a failed exchange when applicable. |
@@ -57,9 +84,9 @@ Create room, join room, and resume session are entry flows outside the in-room c
 
 ### Command and response flow
 
-1. Submit a unique `commandId`, the snapshot's `expectedRevision`, an action kind, and its selected parameters. Authenticate with the private seat credential. The public room code locates the room.
-2. Within one serialized room update, authenticate the seat, check command replay, check the expected revision, then validate the command and parameters against current state. Commit the entire accepted mutation and advance the revision once.
-3. Return the command outcome alongside a fresh snapshot projected for that seat. Authenticated stale or illegal commands return a machine-readable rejection and the latest snapshot without changing state. A retry with the same command ID and payload returns the original outcome and a fresh snapshot without replaying the mutation. Reusing an ID with a different payload is rejected.
+1. Submit a unique `commandId`, the snapshot's `expectedRevision`, an action kind, and its selected parameters. Authenticate with the appropriate private seat or board credential. The public room code locates the room.
+2. Within one serialized room update, authenticate the session, check command replay, check the expected revision, then validate the command and parameters against current state. Commit the entire accepted mutation and advance the revision once.
+3. Return the command outcome alongside a fresh snapshot projected for that session's role. Authenticated stale or illegal commands return a machine-readable rejection and the latest snapshot without changing state. A retry with the same command ID and payload returns the original outcome and a fresh snapshot without replaying the mutation. Reusing an ID with a different payload is rejected.
 
 ### Frontend parity
 
@@ -72,7 +99,7 @@ Tabletop mode is an optional way to play the same room. An iPad lying flat shows
 ### Pair a board
 
 1. The host opens **Pair a board** on their player device and gets a short-lived, single-use pairing code scoped to the room.
-2. On the iPad, choose **Join as board** and enter the pairing code. The server exchanges it for a read-only board session credential. The board can attach during the lobby or an active game.
+2. On the iPad, choose **Join as board** and enter the pairing code. The server exchanges it for a board session credential with permission to fetch public snapshots and start a ready round. The board can attach during the lobby or an active game.
 3. The iPad resumes with its board credential and fetches the latest full board snapshot on load or reconnect. The host can revoke the pairing from their phone. A revoked or expired session returns the iPad to pairing and clears its displayed room state.
 
 The board role uses no player seat and does not count toward the two-to-four-player limit. Pairing and reconnecting leave the turn order and game revision intact. The room can continue if the iPad disconnects. The invite code remains the player join flow.
@@ -81,20 +108,20 @@ The board role uses no player seat and does not count toward the two-to-four-pla
 
 | Device | View and controls |
 | --- | --- |
-| iPad board | Show a large deck with its remaining count, the face-up discard, player names and seat positions, current turn, Cabo final turns, scores, and public round or game results. Make the current player readable from around the table. Show a reconnecting indicator if refresh fails. |
+| iPad board | Show a large deck with its remaining count, the face-up discard, player names and seat positions, current turn, Cabo final turns, scores, and public round or game results. Make the current player readable from around the table. Show readiness during setup, the start button when offered by the server, and a reconnecting indicator if refresh fails. |
 | Player phone | Show the player's four starting slots in a landscape row. Render the actual hand size as exchanges and penalties change it. Show card faces only when the seat snapshot allows them, including private draws, Peek, or Spy. Render the server's available actions and selectable targets, and show enough public context to finish a turn without the iPad. |
 | Host phone | Inherits the player view and provides board pairing and revocation in addition to phase-appropriate host controls. |
 
 ### Snapshot and permission boundary
 
-Use the same room and revision stream for both roles. Produce a complete public `BoardSnapshot` from the authoritative state on the server. Reuse public wire types from `shared/` and keep private seat fields out of the board response type. The board receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes board reads only. Authenticate command submissions as player sessions and reject board credentials before command processing.
+Use the same room and revision stream for both roles. Produce a complete public `BoardSnapshot` from the authoritative state on the server. Reuse public wire types from `shared/` and keep private seat fields out of the board response type. The board receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes public board reads and the single `beginPlay` command. Authorize that command only for an active pairing in this room and a ready deal. Require a player session for every other game command. Board command responses use the public projection.
 
 Phones still receive their normal complete seat snapshots. Landscape layout is a presentation choice. Any Bevy or native client can render the board or a player hand from the relevant role's snapshot.
 
 ### Acceptance
 
 - Pair an iPad and join on two phones. Both phones and the board can refresh into the same current round without depending on previously received updates.
-- At the same revision, the board shows the public turn and piles. Only the authorized phone sees its private draw or power result. A board credential cannot read a seat view or submit a player command.
+- At the same revision, the board shows the public turn and piles. Only the authorized phone sees its private draw or power result. A board credential cannot read a seat view or submit player moves. Verify that its start button appears only after all phones confirm and that tapping it starts exactly one turn.
 - Rotate a phone to landscape, carry out a turn, then reload mid-round. The hand and available controls are restored from the latest seat snapshot.
 - Disconnect or revoke the board while the phones continue playing. Reconnection restores public state with a valid board session. Revocation requires a fresh pairing.
 
@@ -105,7 +132,7 @@ Use one Railway service on `PORT` for the compiled Bevy client and API. Keep `GE
 ## Implementation milestones
 
 - **Scaffold** — Bevy demo, Axum static hosting and health route, and a shared crate with draw validation.
-- **Lobby** — Create, join, resume, and start rooms. Acceptance requires two independent browser sessions to see the same lobby while keeping seat credentials private.
+- **Lobby** — Create, join, resume, and deal rooms. Wire the opening preview and readiness gate. Acceptance requires two independent browser sessions to see the same lobby while keeping seat credentials private.
 - **Playable round** — Port turns, card actions, and scoring. Acceptance requires a full two-player round, rejected illegal or stale moves, and verified player-specific redaction.
 - **Full game** — Port round progression and end-game behavior. Acceptance requires reconnect during play, safe command retry, and a complete game from invite to final scores.
-- **Tabletop mode** — Add board pairing, the public board snapshot, and the landscape hand view. Verify the same room from an iPad and two independent phone sessions.
+- **Tabletop mode** — Add board pairing, the public board snapshot, the board start button, and the landscape hand view. Verify the same room from an iPad and two independent phone sessions.

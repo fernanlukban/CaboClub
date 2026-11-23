@@ -6,8 +6,9 @@ Read [SPEC.md](SPEC.md) before changing gameplay, hosting, or the client/server 
 - Put HTTP, sessions, room lifecycle, randomness, state storage, and player-specific view construction in `server/`. Validate each command against current server state and authenticated seat.
 - Put deterministic rules, domain types, and public wire types in `shared/`. Keep it usable without Bevy, Axum, networking, or a runtime.
 - Render full seat-scoped snapshots and build gameplay controls from `availableActions`. Keep legality, visibility, and state transitions on the server. Use shared rule code to keep action enumeration and command validation aligned.
-- Treat the paired board as a read-only public role. Build its snapshot on the server and use role-specific fixtures to verify that private card knowledge and player actions never reach it.
+- Treat the paired board as a public role with only the `beginPlay` mutation after readiness. Build its snapshot on the server and use role-specific fixtures to verify that private card knowledge and player actions never reach it.
 - Treat snapshot and command JSON as the frontend compatibility contract. When implementing or changing it, update the spec and canonical fixtures so Bevy and native clients can verify the same actions and payloads.
+- Keep round-start transitions in the shared state machine. Check actor, deal, and revision on the server before mutating the room.
 - Exercise changes with the narrowest relevant checks below. Add focused coverage for rule changes, turn ownership, redaction, and command replay when those behaviors change.
 - Update the spec when a contract or milestone changes. Mark unfinished behavior explicitly and report checks you could not run.
 
