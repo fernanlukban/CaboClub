@@ -13,7 +13,7 @@ Two to four players can open a browser, create a private table or join via an in
 ## Game lifecycle
 
 1. Create a room, return a shareable code and a separate private seat credential, then allow up to four seats while the lobby is open.
-2. The host deals four hidden cards per player with at least two players present. Each player privately looks at their first two cards and confirms before the board or host begins play. Show the discard pile's top card and the number of cards left in the deck.
+2. The host deals four hidden cards per player with at least two players present. Each player privately chooses two of their four cards to look at and confirms before the board or host begins play. Show the discard pile's top card and the number of cards left in the deck.
 3. On a player's turn, allow a legal draw, discard, exchange, special ability, or Cabo call. Apply exchanges and their penalties atomically. Deck cards 7–8 allow Peek, 9–10 allow Spy, and 11–12 allow Swap. A Cabo call grants every other player one final turn. Deck exhaustion ends the round.
 4. Reveal hands at round end. A caller tied for the lowest hand scores zero. Otherwise the caller adds ten to their hand total. A hand of 12, 12, 13, 13 scores zero and awards each opponent 50. Exactly 100 resets a player's total to 50 once per game. A total above 100 ends the game and the lowest total wins, with last-round points breaking ties where possible.
 5. The host deals the next round or a new game after completion. Preserve the deployed app's detailed match, penalty, turn order, and scoring behavior in regression cases during the port.
@@ -25,7 +25,7 @@ The host deals and the table starts play in two separate steps. Use the same flo
 | State | Event and guard | Result |
 | --- | --- | --- |
 | `lobby`, `roundResults`, or `gameOver` | Host selects **Deal cards**, **Deal next round**, or **New game**, respectively. Require two to four seats. | Freeze the round roster, deal once, reset readiness, and enter `initialPreview`. There is no active turn yet. |
-| `initialPreview` | A seated player selects **Look at my cards**. | Reveal that seat's two starting cards in its private snapshot. A reconnect before confirmation resumes the reveal. |
+| `initialPreview` | A seated player chooses two distinct slots from their own four starting cards and taps **Reveal 2**. | Record the selected pair for this deal and reveal those two values in the seat's private snapshot. A reconnect before confirmation restores the same pair. Further reveal requests cannot change it. |
 | `initialPreview` | The same player selects **I've looked** after revealing. | Record readiness and hide that seat's opening preview values. When every seat has confirmed, enter `readyToStart`. |
 | `readyToStart` | The paired board or host selects **Start game** for round one or **Start round** for later rounds. | Enter `playing` and set the first turn in the same mutation. |
 | `playing` | A legal move ends the round under the Cabo or deck exhaustion rules. | Score once and enter `roundResults` or `gameOver`. |
@@ -40,7 +40,7 @@ Keep the frozen roster and each seat's preview status in server state. Connectio
 - Serialize mutations per room. Authenticate the current credential, check command replay, then validate the revision, phase, role, and targets. Two simultaneous starts cause one transition. A stale request returns the latest role-scoped snapshot so the client can refresh and resubmit intentionally.
 - Scope setup to a unique deal instance. A delayed reveal, confirmation, start, or cancel from an abandoned deal cannot mutate a replacement. A retry of a committed deal returns the result of that deal without drawing cards again.
 - During play, model each turn as awaiting a draw or Cabo call, resolving a draw, or resolving a power. Validate actor, action, and targets before committing. A resolved move advances at most one turn. Keep Cabo's remaining seats explicit and score at most once per round, including if deck exhaustion and the last final turn coincide.
-- Cover early start, confirmation before reveal, reconnect before and after confirmation, duplicate requests, overlapping start from two devices, stale commands after cancel, and board credential misuse. In gameplay tests, exercise wrong-seat moves and one-time scoring after Cabo and deck exhaustion.
+- Cover early start, confirmation before reveal, duplicate or foreign slot references, attempts to change the revealed pair, reconnect before and after confirmation, duplicate requests, overlapping start from two devices, stale commands after cancel, and board credential misuse. In gameplay tests, exercise wrong-seat moves and one-time scoring after Cabo and deck exhaustion.
 
 ## Client/server boundary
 
@@ -71,7 +71,8 @@ Use stable, tagged action kinds and typed parameters. Each descriptor carries an
 | Action kind | Choices supplied by the server |
 | --- | --- |
 | `dealRound`, `dealNextRound`, `dealNewGame`, `cancelSetup` | Host only, in the applicable phase. Cancellation identifies the current deal. |
-| `revealInitialCards`, `confirmInitialLook` | Seated player only, for their own preview in the current deal. |
+| `revealInitialCards` | Current deal, with exactly two distinct slot references from the server-provided list of the requesting seat's four starting slots. |
+| `confirmInitialLook` | Current deal. The requesting seat must already have revealed a pair. |
 | `beginPlay` | Current deal. Available to the paired board and host only after all seats confirm. |
 | `draw` | Currently available piles, such as `deck` or `discard`. |
 | `discardDrawn`, `useDrawnPower`, `callCabo` | No parameters. For a power, include the power kind visible to the acting player. |
@@ -111,6 +112,23 @@ The board role uses no player seat and does not count toward the two-to-four-pla
 | iPad board | Show a large deck with its remaining count, the face-up discard, player names and seat positions, current turn, Cabo final turns, scores, and public round or game results. Make the current player readable from around the table. Show readiness during setup, the start button when offered by the server, and a reconnecting indicator if refresh fails. |
 | Player phone | Show the player's four starting slots in a landscape row. Render the actual hand size as exchanges and penalties change it. Show card faces only when the seat snapshot allows them, including private draws, Peek, or Spy. Render the server's available actions and selectable targets, and show enough public context to finish a turn without the iPad. |
 | Host phone | Inherits the player view and provides board pairing and revocation in addition to phase-appropriate host controls. |
+
+### Landscape phone design
+
+Give the private hand most of the screen. Use a compact status strip for phase, turn, and connection, a centered row of cards, and a bottom action strip inside the device safe area. Use a dark green table, warm card faces, and large rank numbers. Use an outline and a checkmark for selection so it reads without color. Keep labels and tap targets large enough to use with either thumb.
+
+```text
+ Opening look                                     Choose 2 cards
+
+     [ 1 ▧ ]       [ 2 ✓ ]       [ 3 ▧ ]       [ 4 ✓ ]
+
+ 2 of 2 selected                                  [ Reveal 2 ]
+```
+
+- **Opening selection.** Start with four face-down cards in fixed positions. Tap a card to select or deselect it. Enable **Reveal 2** when two are selected. Tapping a third card prompts the player to deselect one. Submit the pair together and turn over only the two cards returned by the server.
+- **Private reveal.** Keep the other two cards face down. Replace **Reveal 2** with **I've looked**. Confirmation turns both preview cards face down and shows **Waiting for players** or **Ready to start**, as dictated by the server. Keep the card positions stable through the transition.
+- **Active turn.** Keep the hand central. Use the action strip for the controls offered by the current snapshot, with the deck and discard available when relevant. When selecting a target for Spy or Swap, show eligible opponent slots in a temporary target row. Group a larger hand into a scrollable row if needed without shrinking tap targets.
+- **Without an iPad.** Keep a compact public table strip with the turn, deck count, and discard top. In tabletop mode that context can take less space. Rotation or a network refresh preserves choices still supported by the latest snapshot. A page reload after a reveal restores the same selected pair from server state.
 
 ### Snapshot and permission boundary
 

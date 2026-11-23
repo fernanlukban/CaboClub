@@ -1,4 +1,4 @@
-use crate::game::{MAX_PLAYERS, MIN_PLAYERS};
+use crate::game::{MAX_PLAYERS, MIN_PLAYERS, STARTING_HAND_SIZE};
 
 type SeatId = u64;
 
@@ -12,7 +12,7 @@ pub enum Phase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preview {
     Hidden,
-    Revealed,
+    Revealed([usize; 2]),
     Confirmed,
 }
 
@@ -20,6 +20,7 @@ pub enum Preview {
 pub enum SetupError {
     InvalidRoster,
     UnknownSeat,
+    InvalidSelection,
     InvalidTransition,
     NotReady,
 }
@@ -62,12 +63,27 @@ impl RoundStart {
             .find_map(|&(id, preview)| (id == seat).then_some(preview))
     }
 
-    pub fn reveal(&mut self, seat: SeatId) -> Result<(), SetupError> {
-        self.transition_preview(seat, Preview::Hidden, Preview::Revealed)
+    /// Positions are zero-based indexes in the seat's frozen opening hand.
+    pub fn reveal(&mut self, seat: SeatId, slots: [usize; 2]) -> Result<(), SetupError> {
+        let preview = self.preview_mut(seat)?;
+        if *preview != Preview::Hidden {
+            return Err(SetupError::InvalidTransition);
+        }
+        let [first, second] = slots;
+        if first == second || first >= STARTING_HAND_SIZE || second >= STARTING_HAND_SIZE {
+            return Err(SetupError::InvalidSelection);
+        }
+
+        *preview = Preview::Revealed(slots);
+        Ok(())
     }
 
     pub fn confirm(&mut self, seat: SeatId) -> Result<(), SetupError> {
-        self.transition_preview(seat, Preview::Revealed, Preview::Confirmed)?;
+        let preview = self.preview_mut(seat)?;
+        if !matches!(*preview, Preview::Revealed(_)) {
+            return Err(SetupError::InvalidTransition);
+        }
+        *preview = Preview::Confirmed;
         if self
             .previews
             .iter()
@@ -89,25 +105,14 @@ impl RoundStart {
         }
     }
 
-    fn transition_preview(
-        &mut self,
-        seat: SeatId,
-        expected: Preview,
-        next: Preview,
-    ) -> Result<(), SetupError> {
+    fn preview_mut(&mut self, seat: SeatId) -> Result<&mut Preview, SetupError> {
         if self.phase != Phase::InitialPreview {
             return Err(SetupError::InvalidTransition);
         }
-        let (_, preview) = self
-            .previews
+        self.previews
             .iter_mut()
-            .find(|(id, _)| *id == seat)
-            .ok_or(SetupError::UnknownSeat)?;
-        if *preview != expected {
-            return Err(SetupError::InvalidTransition);
-        }
-        *preview = next;
-        Ok(())
+            .find_map(|(id, preview)| (*id == seat).then_some(preview))
+            .ok_or(SetupError::UnknownSeat)
     }
 }
 
@@ -119,10 +124,10 @@ mod tests {
     fn requires_every_seat_to_reveal_and_confirm_before_start() {
         let mut setup = RoundStart::new(&[10, 20]).unwrap();
 
-        assert_eq!(setup.reveal(30), Err(SetupError::UnknownSeat));
+        assert_eq!(setup.reveal(30, [0, 2]), Err(SetupError::UnknownSeat));
         assert_eq!(setup.confirm(10), Err(SetupError::InvalidTransition));
-        setup.reveal(10).unwrap();
-        assert_eq!(setup.preview(10), Some(Preview::Revealed));
+        setup.reveal(10, [0, 2]).unwrap();
+        assert_eq!(setup.preview(10), Some(Preview::Revealed([0, 2])));
         assert_eq!(setup.preview(20), Some(Preview::Hidden));
 
         setup.confirm(10).unwrap();
@@ -131,13 +136,28 @@ mod tests {
         assert_eq!(setup.begin_play(), Err(SetupError::NotReady));
         assert_eq!(setup.phase(), Phase::InitialPreview);
 
-        setup.reveal(20).unwrap();
+        setup.reveal(20, [1, 3]).unwrap();
         assert_eq!(setup.begin_play(), Err(SetupError::NotReady));
         setup.confirm(20).unwrap();
         assert_eq!(setup.phase(), Phase::ReadyToStart);
         setup.begin_play().unwrap();
         assert_eq!(setup.phase(), Phase::Playing);
         assert_eq!(setup.begin_play(), Err(SetupError::InvalidTransition));
+    }
+
+    #[test]
+    fn accepts_one_pair_of_distinct_opening_slots_per_seat() {
+        let mut setup = RoundStart::new(&[10, 20]).unwrap();
+        for slots in [[0, 0], [0, STARTING_HAND_SIZE]] {
+            assert_eq!(setup.reveal(10, slots), Err(SetupError::InvalidSelection));
+        }
+        assert_eq!(setup.preview(10), Some(Preview::Hidden));
+
+        setup.reveal(10, [3, 1]).unwrap();
+        assert_eq!(setup.reveal(10, [0, 2]), Err(SetupError::InvalidTransition));
+        assert_eq!(setup.preview(10), Some(Preview::Revealed([3, 1])));
+        setup.confirm(10).unwrap();
+        assert_eq!(setup.preview(10), Some(Preview::Confirmed));
     }
 
     #[test]
