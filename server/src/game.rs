@@ -6,12 +6,13 @@ use std::{
 use cabo_shared::{
     game::{self, MAX_PLAYERS, MIN_PLAYERS, STARTING_HAND_SIZE, cabo_power::Power},
     protocol::{
-        Action, CardView, Choice, Command, MatchOutcome, PendingPower, PlayerView, PowerResult, RoundResult,
-        Snapshot, TestScenario, TestView,
+        Action, CardView, Choice, Command, MatchOutcome, PendingPower, PlayerView, PowerResult,
+        RoundResult, Snapshot, TestScenario, TestView,
     },
     round_start::{Phase as SetupPhase, Preview, RoundStart},
 };
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use serde::Serialize;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
@@ -116,6 +117,44 @@ struct TestRoom {
     next_bot_move: Instant,
 }
 
+const LOG_LIMIT: usize = 1024;
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogState {
+    revision: u64,
+    phase: &'static str,
+    deal_id: Option<u64>,
+    turn_seat: Option<u64>,
+    turn_step: Option<&'static str>,
+    deck_count: usize,
+    discard_count: usize,
+    discard_top: Option<u8>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntry {
+    sequence: u64,
+    event: &'static str,
+    action: Option<Action>,
+    seat: Option<u64>,
+    board: bool,
+    slot_count: usize,
+    result: &'static str,
+    before: LogState,
+    after: LogState,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameLog<'a> {
+    version: u8,
+    truncated: bool,
+    test: Option<TestView>,
+    entries: &'a VecDeque<LogEntry>,
+}
+
 pub struct Room {
     code: String,
     id: String,
@@ -136,6 +175,8 @@ pub struct Room {
     message: String,
     replay: HashMap<(String, String), (Command, String)>,
     replay_order: VecDeque<(String, String)>,
+    log: VecDeque<LogEntry>,
+    next_log_sequence: u64,
     pub last_active: Instant,
 }
 
@@ -162,7 +203,70 @@ impl Room {
             message: String::new(),
             replay: HashMap::new(),
             replay_order: VecDeque::new(),
+            log: VecDeque::new(),
+            next_log_sequence: 1,
         }
+    }
+
+    pub fn game_log(&self) -> GameLog<'_> {
+        GameLog {
+            version: 1,
+            truncated: self.next_log_sequence > LOG_LIMIT as u64 + 1,
+            test: self.test_view(),
+            entries: &self.log,
+        }
+    }
+
+    fn test_view(&self) -> Option<TestView> {
+        self.test.as_ref().map(|test| TestView {
+            scenario: test.scenario,
+            seed: test.seed.to_string(),
+            generation: test.generation,
+        })
+    }
+
+    fn log_state(&self) -> LogState {
+        let round = self.round.as_ref();
+        LogState {
+            revision: self.revision,
+            phase: match self.phase {
+                Phase::Lobby => "lobby",
+                Phase::Setup => "setup",
+                Phase::Playing => "playing",
+                Phase::Results => "roundResults",
+                Phase::Finished => "gameOver",
+            },
+            deal_id: round.map(|round| round.id),
+            turn_seat: round
+                .filter(|_| self.phase == Phase::Playing)
+                .map(|round| self.players[round.turn].id),
+            turn_step: round.filter(|_| self.phase == Phase::Playing).map(|round| {
+                match round.step {
+                    TurnStep::Awaiting => "awaiting",
+                    TurnStep::Incoming {
+                        from_deck: true, ..
+                    } => "incomingDeck",
+                    TurnStep::Incoming {
+                        from_deck: false, ..
+                    } => "incomingDiscard",
+                    step => step.power().unwrap().1,
+                }
+            }),
+            deck_count: round.map_or(0, |round| round.deck.len()),
+            discard_count: round.map_or(0, |round| round.discard.len()),
+            discard_top: round
+                .and_then(|round| round.discard.last())
+                .map(|card| card.rank),
+        }
+    }
+
+    fn record(&mut self, mut entry: LogEntry) {
+        entry.sequence = self.next_log_sequence;
+        self.next_log_sequence += 1;
+        if self.log.len() == LOG_LIMIT {
+            self.log.pop_front();
+        }
+        self.log.push_back(entry);
     }
 
     pub fn enable_test(&mut self, scenario: TestScenario, seed: u64) {
@@ -234,7 +338,9 @@ impl Room {
         if self.phase != Phase::Lobby || self.players.len() >= MAX_PLAYERS {
             return Err("roomUnavailable");
         }
+        let before = self.log_state();
         let token = secret();
+        let seat = self.players.len() as u64 + 1;
         self.players.push(Player {
             id: self.players.len() as u64 + 1,
             token: token.clone(),
@@ -258,6 +364,17 @@ impl Room {
             }
         }
         self.changed("A player joined the table.");
+        self.record(LogEntry {
+            sequence: 0,
+            event: "join",
+            action: None,
+            seat: Some(seat),
+            board: false,
+            slot_count: 0,
+            result: "accepted",
+            before,
+            after: self.log_state(),
+        });
         Ok(token)
     }
 
@@ -432,6 +549,41 @@ impl Room {
     }
 
     pub fn command(
+        &mut self,
+        token: &str,
+        role: Role,
+        command: Command,
+    ) -> Result<String, &'static str> {
+        let before = self.log_state();
+        let action = command.action;
+        let slot_count = command.slots.len();
+        let replay = self
+            .replay
+            .contains_key(&(token.to_owned(), command.command_id.clone()));
+        let result = self.apply_command(token, role, command);
+        let seat = match role {
+            Role::Seat(index) => Some(self.players[index].id),
+            _ => None,
+        };
+        self.record(LogEntry {
+            sequence: 0,
+            event: "command",
+            action: Some(action),
+            seat,
+            board: seat.is_none(),
+            slot_count,
+            before,
+            after: self.log_state(),
+            result: match &result {
+                Ok(_) if replay => "replayed",
+                Ok(_) => "accepted",
+                Err(error) => error,
+            },
+        });
+        result
+    }
+
+    fn apply_command(
         &mut self,
         token: &str,
         role: Role,
@@ -737,10 +889,13 @@ impl Room {
                 } else {
                     &mut round.discard
                 };
-                round.step = TurnStep::Incoming {
-                    card: pile.pop().unwrap(),
-                    from_deck,
-                };
+                let card = pile.pop().unwrap();
+                round.step = TurnStep::Incoming { card, from_deck };
+                if !from_deck && round.discard.is_empty() {
+                    round
+                        .discard
+                        .push(round.deck.pop().expect("an open turn has a deck card"));
+                }
                 return "A player picked up a card.";
             }
             DiscardHandCard => {
@@ -766,7 +921,9 @@ impl Room {
             }
             CallMatch => {
                 let source = match round.step {
-                    TurnStep::Incoming { from_deck: true, .. } => "deck",
+                    TurnStep::Incoming {
+                        from_deck: true, ..
+                    } => "deck",
                     TurnStep::Incoming { .. } => "discardPickup",
                     _ => "discardTop",
                 };
@@ -802,6 +959,11 @@ impl Room {
                         hand.insert(0, card);
                     } else {
                         hand.push(card);
+                    }
+                    if round.discard.is_empty() {
+                        round
+                            .discard
+                            .push(round.deck.pop().expect("an open turn has a deck card"));
                     }
                     if selected.len() >= 3 {
                         if let Some(penalty) = round.deck.pop() {
@@ -1015,12 +1177,14 @@ impl Room {
         });
         let private_power_result = round
             .and_then(|round| match round.step {
-                TurnStep::PeekViewing(id, rank) if viewer == Some(round.turn) => Some(PowerResult {
-                    result_id: id,
-                    kind: "peek",
-                    rank: Some(rank),
-                    target_name: None,
-                }),
+                TurnStep::PeekViewing(id, rank) if viewer == Some(round.turn) => {
+                    Some(PowerResult {
+                        result_id: id,
+                        kind: "peek",
+                        rank: Some(rank),
+                        target_name: None,
+                    })
+                }
                 TurnStep::SpyViewing(id, target, rank) if viewer == Some(round.turn) => {
                     Some(PowerResult {
                         result_id: id,
@@ -1097,13 +1261,11 @@ impl Room {
             private_power_result,
             match_outcome: round
                 .and_then(|round| round.match_outcome.as_ref())
-                .filter(|(seat, outcome)| viewer == Some(*seat) && outcome.revision == self.revision)
+                .filter(|(seat, outcome)| {
+                    viewer == Some(*seat) && outcome.revision == self.revision
+                })
                 .map(|(_, outcome)| outcome.clone()),
-            test: self.test.as_ref().map(|test| TestView {
-                scenario: test.scenario,
-                seed: test.seed.to_string(),
-                generation: test.generation,
-            }),
+            test: self.test_view(),
             cabo_caller: round.and_then(|r| r.caller).map(|i| self.players[i].id),
             final_turns: round
                 .map(|r| r.final_turns.iter().map(|&i| self.players[i].id).collect())
@@ -1175,7 +1337,14 @@ mod tests {
             Err("actionUnavailable")
         );
         run(room, Role::CreatorBoard, Action::BeginPlay, vec![]);
-        assert!(room.actions(Role::CreatorBoard).is_empty());
+        assert!(
+            room.actions(Role::CreatorBoard)
+                .iter()
+                .all(|choice| matches!(
+                    choice.action,
+                    Action::RestartTest | Action::RestartTestNewSeed
+                ))
+        );
     }
 
     #[test]
@@ -1359,6 +1528,98 @@ mod tests {
     }
 
     #[test]
+    fn taking_last_discard_reveals_a_replacement_and_keeps_the_draw() {
+        let mut room = setup();
+        start(&mut room);
+        let round = room.round.as_ref().unwrap();
+        let taken = round.discard[0];
+        let replacement = *round.deck.last().unwrap();
+        let deck_count = round.deck.len();
+        run(&mut room, Role::Seat(0), Action::DrawDiscard, vec![]);
+        let round = room.round.as_ref().unwrap();
+        assert_eq!(round.discard.last().unwrap().slot, replacement.slot);
+        assert_eq!(round.deck.len(), deck_count - 1);
+        assert_eq!(
+            room.snapshot(Role::Seat(0)).incoming.unwrap().slot,
+            taken.slot
+        );
+        let trace = room.game_log();
+        let entry = trace.entries.back().unwrap();
+        assert_eq!(entry.action, Some(Action::DrawDiscard));
+        assert_eq!(entry.before.discard_count, 1);
+        assert_eq!(entry.after.discard_count, 1);
+    }
+
+    #[test]
+    fn missed_match_first_refills_before_a_penalty_and_preserves_the_round() {
+        let mut room = setup();
+        start(&mut room);
+        room.players[0].hand[0].rank = 2;
+        room.players[0].hand[1].rank = 3;
+        room.round.as_mut().unwrap().deck.truncate(1);
+        let selected = slots(&room.players[0])[..3].to_vec();
+        run(&mut room, Role::Seat(0), Action::CallMatch, selected);
+        let round = room.round.as_ref().unwrap();
+        assert_eq!(round.discard.len(), 1);
+        assert_eq!(room.players[0].hand.len(), 5);
+        assert_eq!(room.snapshot(Role::CreatorBoard).phase, "roundResults");
+    }
+
+    #[test]
+    fn seeded_legal_turn_fuzz_keeps_cards_and_discard_intact() {
+        for seed in 0..128 {
+            let mut room = Room::new("FUZZ".into(), true);
+            room.enable_test(TestScenario::Random, seed);
+            room.join("Human").unwrap();
+            run(&mut room, Role::CreatorBoard, Action::DealRound, vec![]);
+            start(&mut room);
+            let mut rng = StdRng::seed_from_u64(seed);
+            for step in 0..400 {
+                let round = room.round.as_ref().unwrap();
+                assert!(!round.discard.is_empty(), "seed {seed}, step {step}");
+                let incoming = match round.step {
+                    TurnStep::Incoming { card, .. } => Some(card.slot),
+                    _ => None,
+                };
+                let all_slots: Vec<_> = round
+                    .deck
+                    .iter()
+                    .chain(&round.discard)
+                    .chain(room.players.iter().flat_map(|player| &player.hand))
+                    .map(|card| card.slot)
+                    .chain(incoming)
+                    .collect();
+                assert_eq!(all_slots.len(), 52, "seed {seed}, step {step}");
+                assert_eq!(
+                    all_slots.into_iter().collect::<HashSet<_>>().len(),
+                    52,
+                    "seed {seed}, step {step}"
+                );
+                if room.phase != Phase::Playing {
+                    break;
+                }
+                let role = Role::Seat(round.turn);
+                let mut actions = room.actions(role);
+                actions.retain(|choice| {
+                    !matches!(choice.action, Action::PairBoard | Action::RevokeBoard)
+                });
+                assert!(!actions.is_empty(), "seed {seed}, step {step}");
+                let choice = actions.swap_remove(rng.random_range(0..actions.len()));
+                let mut selected = choice.slots;
+                if !matches!(choice.action, Action::ConfirmSpy | Action::ConfirmSwap) {
+                    selected.shuffle(&mut rng);
+                    selected.truncate(rng.random_range(choice.min..=choice.max));
+                }
+                run(&mut room, role, choice.action, selected);
+            }
+            assert!(
+                room.phase != Phase::Playing,
+                "seed {seed} got stuck in an open round"
+            );
+        }
+    }
+
+    #[test]
     fn three_card_match_first_keeps_previous_discard_and_replays_once() {
         let mut room = setup();
         start(&mut room);
@@ -1409,8 +1670,18 @@ mod tests {
         let mut room = setup();
         for index in 0..2 {
             let pair = slots(&room.players[index])[..2].to_vec();
-            run(&mut room, Role::Seat(index), Action::RevealInitialCards, pair);
-            run(&mut room, Role::Seat(index), Action::ConfirmInitialLook, vec![]);
+            run(
+                &mut room,
+                Role::Seat(index),
+                Action::RevealInitialCards,
+                pair,
+            );
+            run(
+                &mut room,
+                Role::Seat(index),
+                Action::ConfirmInitialLook,
+                vec![],
+            );
         }
         run(&mut room, Role::Seat(0), Action::RevokeBoard, vec![]);
         run(&mut room, Role::Seat(0), Action::BeginPlay, vec![]);
@@ -1428,7 +1699,10 @@ mod tests {
         let skip = command(&room, "host-skip", Action::SkipTurn, vec![]);
         room.command(&host, Role::Seat(0), skip.clone()).unwrap();
         assert_eq!(room.snapshot(Role::Seat(0)).phase, "roundResults");
-        assert_eq!(room.round.as_ref().unwrap().discard.last().unwrap().slot, discard);
+        assert_eq!(
+            room.round.as_ref().unwrap().discard.last().unwrap().slot,
+            discard
+        );
         assert_eq!(slots(&room.players[1]), hand);
         let revision = room.revision;
         room.command(&host, Role::Seat(0), skip).unwrap();
@@ -1447,7 +1721,10 @@ mod tests {
         assert!(!result.matched);
         assert!(result.penalty_slot.is_none());
         assert!(result.discarded_slots.is_empty());
-        assert_eq!(room.players[0].hand.last().unwrap().slot, result.incoming_slot);
+        assert_eq!(
+            room.players[0].hand.last().unwrap().slot,
+            result.incoming_slot
+        );
         assert!(room.snapshot(Role::Seat(1)).match_outcome.is_none());
         assert!(room.snapshot(Role::CreatorBoard).match_outcome.is_none());
     }

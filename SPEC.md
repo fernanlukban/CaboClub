@@ -60,6 +60,10 @@ Players call a match on two or more distinct cards from their own hand. The serv
 
 Send the selected slot references with `callMatch`. Derive the incoming source from the authoritative turn state. Validate the complete command before touching the deck, discard, or hand. Replaying an accepted command must neither repeat the move nor create another penalty.
 
+### Discard continuity
+
+From the first deal through scoring, the discard pile always has a visible top. Taking its last card reveals the next deck card as a replacement in the same mutation. On a failed match that consumes the last discard, refill before drawing an extra penalty card. If the refill uses the final deck card, finish the pending move before scoring. The replacement itself never triggers a power.
+
 ## Client/server boundary
 
 The wire contract is versioned JSON. `shared/` will define the Rust types for snapshots, action descriptors, and commands. A native client can implement the same contract directly in Swift. Bevy and native clients own rendering, accessibility, animation, selection, and transport. Game outcomes, visibility, phase transitions, scoring, and available actions come from the server. The server uses shared rules to validate moves and enumerate actions from the same revision.

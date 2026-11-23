@@ -30,6 +30,17 @@ Open http://localhost:8080/tabletop on the tabletop device. Create a room and op
 
 On staging, open **TEST room** from the tabletop home to try random bot play or a Spy or Swap drill. For a local TEST room, run the server with `CABO_TEST_ROOMS=1`.
 
+### Debug a game
+
+Open **Game log** on the board or a player device, then tap **Copy game log**. Save the copied JSON to a file or paste it into a bug report. It includes accepted and rejected actions, anonymous seat numbers, revisions, and public pile state. TEST rooms include their seed and scenario.
+
+```sh
+python3 scripts/check-game-log.py game-log.json
+cargo test -p cabo-server seeded_legal_turn_fuzz
+```
+
+The checker replays the public trace and reports the first broken invariant. Hidden hands and deck order are excluded, so the trace cannot recreate a normal game's concealed deal. The log retains the latest 1,024 events.
+
 Rooms live in memory. A restart ends active games. Check `/health` for server readiness.
 
 ```sh

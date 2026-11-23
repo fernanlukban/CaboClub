@@ -231,10 +231,56 @@ function home() {
   return node("section",{class:"home"},brand,node("h2",{},creating?"Create a game":"Join a game"),form,
     notice?node("p",{role:"status"},notice):null,button("Back",()=>navigate("home")));
 }
+async function openGameLog() {
+  const activeSession = session;
+  const feedback = node("p",{role:"status"},"Loading game log…");
+  const content = node("div",{class:"game-log-content"});
+  const dialog = node("dialog",{class:"game-log","aria-labelledby":"game-log-title"},
+    node("header",{class:"top"},node("h2",{id:"game-log-title"},"Game log"),
+      button("Close",()=>dialog.close())),
+    feedback,content);
+  dialog.addEventListener("close",()=>dialog.remove(),{once:true});
+  document.body.append(dialog);
+  dialog.showModal();
+  try {
+    const [response, log] = await request(endpoint("/log"),undefined,activeSession);
+    if (!dialog.open || activeSession !== session) return;
+    if (!response.ok) throw new Error("Log unavailable");
+    const json = JSON.stringify(log,null,2);
+    const copy = button("Copy game log", async () => {
+      try {
+        await navigator.clipboard.writeText(json);
+        feedback.textContent = "Game log copied.";
+      } catch {
+        const field = node("textarea",{"aria-label":"Game log JSON",readonly:"",rows:5});
+        field.value = json;
+        content.prepend(field);
+        field.focus();
+        field.select();
+        let copied = false;
+        try { copied = document.execCommand("copy"); } catch { /* Leave the text selected for manual copy. */ }
+        if (copied) field.remove();
+        feedback.textContent = copied ? "Game log copied." : "Select and copy the game log JSON.";
+      }
+    },true);
+    const entries = log.entries.map(entry=>{
+      const action = entry.action?.replace(/[A-Z]/g,letter=>" "+letter.toLowerCase()) ?? "joined";
+      const actor = entry.board ? "Board" : `Seat ${entry.seat}`;
+      const pile = entry.after.discardTop===null ? "empty" : String(entry.after.discardTop);
+      return node("li",{},`${actor} · ${action} · ${entry.result} · discard ${pile}`);
+    });
+    content.replaceChildren(copy,node("ol",{start:log.entries[0]?.sequence ?? 1},...entries));
+    feedback.textContent = log.truncated ? "Showing the latest 1,024 events." :
+      (entries.length ? "" : "No moves have been logged yet.");
+  } catch {
+    if (dialog.open) feedback.textContent = "Could not load the game log. Close and try again.";
+  }
+}
+
 function top(showTableControls = false) {
   return node("header",{class:"top"},node("span",{class:"brand"},"Cabo Club"),
     node("span",{},`${snapshot.roomCode} · ${snapshot.round ? "Round " + snapshot.round : "Lobby"}`),
-    node("div",{class:"top-controls"},showTableControls?button("Table",()=>{tableControlsOpen=!tableControlsOpen;render();}):null,button("Leave",()=>leave())));
+    node("div",{class:"top-controls"},button("Game log",openGameLog),showTableControls?button("Table",()=>{tableControlsOpen=!tableControlsOpen;render();}):null,button("Leave",()=>leave())));
 }
 function card(view, index = 0, action, selected = false, name) {
   const rank = view?.rank;

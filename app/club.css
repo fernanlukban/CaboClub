@@ -82,3 +82,9 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 .power-toast{position:fixed;bottom:max(12px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:.75rem;max-width:90vw;z-index:6;background:#122b25;border:1px solid var(--gold);border-radius:8px;padding:.6rem .8rem;box-shadow:0 8px 22px #071912ad}
 .tabletop-hand button.card:enabled{cursor:pointer;outline:1px dashed var(--gold)}
 .home select{background:#102a24;color:var(--ink);border:1px solid var(--edge);border-radius:7px;min-height:44px;padding:.6rem}
+.game-log{width:min(90vw,38rem);max-height:85dvh;overflow:auto;background:#122b25;color:var(--ink);border:1px solid var(--edge);border-radius:10px;padding:1rem}
+.game-log::backdrop{background:#071912b0}
+.game-log h2{font-size:1.8rem}
+.game-log ol{padding-left:2.35rem;font-size:.875rem}
+.game-log li{padding:.3rem 0;border-bottom:1px solid var(--edge)}
+.game-log textarea{width:100%;margin-bottom:.5rem;background:#102a24;color:var(--ink)}

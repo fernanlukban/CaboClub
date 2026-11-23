@@ -189,6 +189,20 @@ async fn snapshot(
     Ok(Json(room.snapshot(role)))
 }
 
+async fn game_log(
+    State(state): State<Rooms>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let token = credential(&headers)?;
+    let mut rooms = state.lock().await;
+    let room = room_mut(&mut rooms, &code)?;
+    if room.role(token).is_none() {
+        return Err(bad(StatusCode::UNAUTHORIZED, "invalidSession"));
+    }
+    Ok(Json(room.game_log()).into_response())
+}
+
 async fn command(
     State(state): State<Rooms>,
     Path(code): Path<String>,
@@ -261,6 +275,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/rooms/{code}/join", post(join))
         .route("/rooms/{code}/board", post(pair))
         .route("/rooms/{code}/commands", post(command))
+        .route("/rooms/{code}/log", get(game_log))
         .route("/qr", get(qr))
         .layer(axum::extract::DefaultBodyLimit::max(8192))
         .layer(axum::middleware::map_response(
