@@ -125,6 +125,8 @@ Keep canonical JSON fixtures for lobby, waiting, draw, each card power, round re
 
 ## Tabletop mode
 
+See [Tabletop powers and TEST room](TABLETOP_FLOWS.md) for the proposed Spy and Swap interactions and bot testing flow.
+
 Tabletop mode is an optional way to play the same room. An iPad lying flat shows the shared table while each player uses a phone in landscape for their private hand. Players can use the regular client view alongside tabletop devices in the same game.
 
 ### Open tabletop mode on the iPad
