@@ -27,7 +27,7 @@
     "youSeatId": 1,
     "dealId": 2,
     "revision": 24,
-    "pendingPower": {"powerId": 8, "actorSeatId": 1, "kind": "spy", "phase": "spyViewing", "ownSlot": null, "targetSlot": null},
+    "pendingPower": {"powerId": 8, "actorSeatId": 1, "kind": "spy", "phase": "spyViewing", "ownSlot": null, "targetSlot": 21},
     "privatePowerResult": {"resultId": 8, "kind": "spy", "slot": 21, "rank": 7, "targetName": "Bea"},
     "availableActions": [{"action": "acknowledgeSpy", "slots": [], "targets": [], "min": 0, "max": 0, "chooseSide": false}]
   },
@@ -36,7 +36,7 @@
     "youSeatId": null,
     "dealId": 2,
     "revision": 24,
-    "pendingPower": {"powerId": 8, "actorSeatId": 1, "kind": "spy", "phase": "spyViewing", "ownSlot": null, "targetSlot": null},
+    "pendingPower": {"powerId": 8, "actorSeatId": 1, "kind": "spy", "phase": "spyViewing", "ownSlot": null, "targetSlot": 21},
     "privatePowerResult": null,
     "availableActions": []
   },
@@ -116,5 +116,14 @@
       {"slot": 50, "rank": null, "faceUp": false},
       {"slot": 52, "rank": null, "faceUp": false}
     ]}]
+  },
+  "boardDeckDraw": {
+    "role": "board",
+    "youSeatId": null,
+    "phase": "playing",
+    "revision": 45,
+    "turnSeatId": 2,
+    "incomingSource": "deck",
+    "incoming": null
   }
 }

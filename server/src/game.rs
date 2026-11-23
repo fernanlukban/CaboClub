@@ -110,7 +110,7 @@ impl TurnStep {
             Self::PeekViewing(id, _) => (id, "peekViewing", None, None),
             Self::SpySelecting(id) => (id, "spySelecting", None, None),
             Self::SpyReview(id, target) => (id, "spyReview", None, Some(target)),
-            Self::SpyViewing(id, ..) => (id, "spyViewing", None, None),
+            Self::SpyViewing(id, _, card) => (id, "spyViewing", None, Some(card.slot)),
             Self::SwapSelectingOwn(id) => (id, "swapSelectingOwn", None, None),
             Self::SwapSelectingOpponent(id, own) => (id, "swapSelectingOpponent", Some(own), None),
             Self::SwapReview(id, own, target) => (id, "swapReview", Some(own), Some(target)),
@@ -1321,16 +1321,18 @@ impl Room {
                 ready: self.phase == Phase::Setup && matches!(preview, Some(Preview::Confirmed(_))),
                 opening_look_slots, bot:p.bot, cards }
         }).collect();
-        let incoming = round.and_then(|round| {
-            let card = match round.step {
-                TurnStep::Incoming { card, .. } => Some(card),
-                TurnStep::MatchFlipping => round
-                    .pending_match
-                    .as_ref()
-                    .and_then(|pending| pending.incoming.map(|(card, _)| card)),
-                _ => None,
-            }?;
-            (card.face_up || viewer == Some(round.turn)).then(|| card.view(true))
+        let held = round.and_then(|round| match round.step {
+            TurnStep::Incoming { card, from_deck } => Some((card, from_deck)),
+            TurnStep::MatchFlipping => round
+                .pending_match
+                .as_ref()
+                .and_then(|pending| pending.incoming),
+            _ => None,
+        });
+        let incoming_source = held.map(|(_, from_deck)| if from_deck { "deck" } else { "discard" });
+        let incoming = held.and_then(|(card, _)| {
+            (card.face_up || round.is_some_and(|round| viewer == Some(round.turn)))
+                .then(|| card.view(true))
         });
         let pending_power = round.and_then(|round| {
             let (power_id, phase, own_slot, target_slot) = round.step.power()?;
@@ -1438,6 +1440,7 @@ impl Room {
             deck_count: round.map_or(0, |r| r.deck.len()),
             discard_top: round.and_then(|r| r.discard.last()).map(|c| c.rank),
             incoming,
+            incoming_source,
             pending_power,
             private_power_result,
             match_flip: round
@@ -1600,6 +1603,16 @@ mod tests {
         );
         room.command(&actor, Role::Seat(0), confirm.clone())
             .unwrap();
+        let public = room.snapshot(Role::CreatorBoard);
+        assert_eq!(public.pending_power.unwrap().target_slot, Some(target.slot));
+        assert!(public.private_power_result.is_none());
+        assert!(
+            room.snapshot(Role::Seat(1))
+                .pending_power
+                .unwrap()
+                .target_slot
+                .is_none()
+        );
         let reveal = room.snapshot(Role::Seat(0)).private_power_result.unwrap();
         assert_eq!(
             (reveal.slot, reveal.rank),
@@ -2095,7 +2108,9 @@ mod tests {
         start(&mut room);
         let discard = room.round.as_ref().unwrap().discard.last().unwrap().rank;
         run(&mut room, Role::Seat(0), Action::DrawDiscard, vec![]);
-        let incoming = room.snapshot(Role::CreatorBoard).incoming.unwrap();
+        let board = room.snapshot(Role::CreatorBoard);
+        assert_eq!(board.incoming_source, Some("discard"));
+        let incoming = board.incoming.unwrap();
         assert!(incoming.face_up);
         assert_eq!(incoming.rank, Some(discard));
         let target = room.players[0].hand[0].slot;
@@ -2109,7 +2124,9 @@ mod tests {
         assert!(kept.face_up);
         assert_eq!(kept.rank, Some(discard));
         run(&mut room, Role::Seat(1), Action::DrawDeck, vec![]);
-        assert!(room.snapshot(Role::CreatorBoard).incoming.is_none());
+        let board = room.snapshot(Role::CreatorBoard);
+        assert_eq!(board.incoming_source, Some("deck"));
+        assert!(board.incoming.is_none());
         assert!(!room.snapshot(Role::Seat(1)).incoming.unwrap().face_up);
     }
 
