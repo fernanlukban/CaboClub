@@ -2,7 +2,7 @@
 
 ## Goal
 
-Two to four players can open a browser, create a private table or join via an invite, and play a full Cabo game. The host or a room-creating board deals rounds. The iPad board begins play once every player confirms their opening look. Players keep their seat when reconnecting with a valid session.
+Two to four players can open a browser, create a private table or join via an invite, and play a full Cabo game. The host or a room-creating board deals rounds. The iPad board begins play once every player confirms their opening look. The host can start when no board session is authorized. Players keep their seat when reconnecting with a valid session.
 
 ## Ownership
 
@@ -27,10 +27,10 @@ Dealing and starting play happen in two separate steps. Use the same flow for th
 | `lobby`, `roundResults`, or `gameOver` | The host or room-creating board selects **Deal cards**, **Deal next round**, or **New game**, respectively. Require two to four seats. | Freeze the round roster, deal once, reset readiness, and enter `initialPreview`. There is no active turn yet. |
 | `initialPreview` | A seated player chooses two distinct slots from their own four starting cards and taps **Reveal 2**. | Record the selected pair for this deal and reveal those two values in the seat's private snapshot. A reconnect before confirmation restores the same pair. Further reveal requests cannot change it. |
 | `initialPreview` | The same player selects **I've looked** after revealing. | Record readiness and hide that seat's opening preview values. Remove the two ranks from subsequent seat snapshots, replay responses, and remembered-card UI. A later game-authorized reveal or public scoring can show them again. When every seat has confirmed, enter `readyToStart`. |
-| `readyToStart` | The paired board selects **Start game** for round one or **Start round** for later rounds. | Enter `playing` and set the first turn in the same mutation. |
+| `readyToStart` | The authorized board, or the host when no board is authorized, selects **Start game** for round one or **Start round** for later rounds. | Enter `playing` and set the first turn in the same mutation. |
 | `playing` | A legal move ends the round under the Cabo or deck exhaustion rules. | Score once and enter `roundResults` or `gameOver`. |
 
-The board displays readiness by seat. It shows its start button only when the server includes `beginPlay` in the board action list. If the board disconnects before starting, reconnect it or pair another board. The board never sees the opening card values or generates player confirmations. **I've looked** is an explicit player acknowledgment. The server can verify that a reveal occurred, and the player confirms that they saw it.
+The board displays readiness by seat. It shows its start button only when the server includes `beginPlay` in the board action list. If the board disconnects before starting, reconnect it, pair another board, or revoke board access and start from the host phone. The board never sees the opening card values or generates player confirmations. **I've looked** is an explicit player acknowledgment. The server can verify that a reveal occurred, and the player confirms that they saw it.
 
 Keep the frozen roster and each seat's preview status in server state. Connection changes neither confirm a seat nor remove it from readiness. If a seat cannot return during the first-round preview, the host can cancel setup and return to the lobby. After a later deal, cancel back to the last results without changing completed scores. Discard the abandoned deal and readiness in both cases. In the first playable version, a confirmed seat remains ready until that setup is canceled or play begins.
 
@@ -92,15 +92,17 @@ Use stable, tagged action kinds and typed parameters. Each descriptor carries an
 | `cancelSetup` | Host only, in setup. Identifies the current deal. |
 | `revealInitialCards` | Current deal, with exactly two distinct slot references from the server-provided list of the requesting seat's four starting slots. |
 | `confirmInitialLook` | Current deal. The requesting seat must already have revealed a pair. |
-| `beginPlay` | Current deal. Available only to the board after all seats confirm. |
+| `beginPlay` | Current deal. Available after all seats confirm to the authorized board or to the host if no board is authorized. |
 | `drawDeck`, `drawDiscard` | No parameters. Each appears when the corresponding pile can be taken. |
 | `discardDrawn`, `useDrawnPower`, `callCabo` | No parameters. For a power, include the power kind visible to the acting player. |
 | `discardHandCard` | One selectable existing hand slot to trade for the current incoming card. |
 | `callMatch` | Selectable own slots, minimum of two, maximum set by the current hand and game rules, and any required placement choice for a failed match. Offer before a draw if the discard top is available, or while resolving an incoming card. |
-| `peek` | Selectable own card slots. |
+| `peek` | Selectable own card slots. Enters an actor-only private view. |
+| `acknowledgePeek` | Current deal and power instance. Clears the private view and completes the turn. |
+| `skipTurn` | Host only during play. Current deal and revision. Settles any pending draw to discard, clears any unfinished power, then completes the active turn normally. |
 | Spy and Swap | See [the tabletop power contract](TABLETOP_FLOWS.md#wire-contract-changes). |
 
-Create room, join room, and resume session are entry flows outside the in-room catalog. A seat with no available commands receives an empty array. For a match, list selectable slots and count constraints without enumerating matching sets. The server resolves the outcome using hidden card values. Clients can choose their own presentation for waiting and unsupported actions. Unknown action kinds must never be submitted by an older client.
+Create room, join room, and resume session are entry flows outside the in-room catalog. A seat with no available commands receives an empty array. The actor can receive a rank-free `matchOutcome` at the accepted revision with source, placement, discarded slots, and an optional penalty slot. This field is omitted for other roles and at later revisions. For a match, list selectable slots and count constraints without enumerating matching sets. The server resolves the outcome using hidden card values. Clients can choose their own presentation for waiting and unsupported actions. Unknown action kinds must never be submitted by an older client.
 
 ### HTTP endpoints
 

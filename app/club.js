@@ -43,7 +43,7 @@ const labels = {
   callCabo:"Call Cabo",useDrawnPower:"Use card power",peek:"Peek",
   confirmSpy:"Confirm Spy",confirmSwap:"Confirm Swap",acknowledgeSpy:"Done",
   restartTest:"Restart test",restartTestNewSeed:"Restart with new seed",
-  pairBoard:"Pair a board",revokeBoard:"Revoke board access",
+  pairBoard:"Pair a board",revokeBoard:"Revoke board access",skipTurn:"Skip turn",
 };
 const errors = {
   staleRevision:"The table changed. Choose your move again.",staleDeal:"This deal has changed.",
@@ -102,7 +102,8 @@ function accept(next, force = false, renderNow = true) {
   const allowed = selectable(next);
   selection = selection.filter(slot => allowed.has(slot));
   animateTabletopSwap = mode==="board" && snapshot?.pendingPower?.phase==="swapReview"
-    && !next.pendingPower && snapshot.dealId===next.dealId;
+    && !next.pendingPower && snapshot.dealId===next.dealId
+    && !next.message.endsWith("’s turn was skipped.");
   snapshot = next;
   if (renderNow) render();
 }
@@ -166,8 +167,15 @@ async function submit(choice, explicitSlots) {
     if (response.ok) {
       notice = "";
       if (choice.action === "pairBoard") { pairing = body.detail; tableControlsOpen = true; }
-      if (["drawDeck","drawDiscard","discardHandCard","discardDrawn","callMatch"].includes(choice.action))
-        moveAnimation = { action:choice.action, slots };
+      const match = body.snapshot?.matchOutcome;
+      const nextRevision = body.snapshot?.revision === data.expectedRevision + 1;
+      if (choice.action === "callMatch" && nextRevision && match?.revision === body.snapshot.revision) {
+        notice = body.detail;
+        moveAnimation = { action:choice.action, match };
+      } else if (nextRevision && ["drawDeck","drawDiscard","discardHandCard","discardDrawn"].includes(choice.action)) {
+        moveAnimation = { action:choice.action };
+      }
+      if (choice.action === "skipTurn" && nextRevision) notice = body.detail;
       if (choice.action === "revokeBoard") pairing = "";
       selection = [];
     } else notice = errors[body.detail] || "That action could not be applied.";
@@ -262,7 +270,8 @@ function status() {
   const turn = snapshot.players.find(p=>p.seatId===snapshot.turnSeatId);
   if (notice) return notice;
   if (snapshot.phase==="initialPreview") return "Waiting for opening looks";
-  if (snapshot.phase==="readyToStart") return "Everyone is ready";
+  if (snapshot.phase==="readyToStart") return snapshot.availableActions.some(choice=>choice.action==="beginPlay")
+    ? "Everyone is ready" : "Everyone is ready · Start on the tabletop screen";
   if (turn) return turn.seatId===snapshot.youSeatId?"Your turn":`${turn.name}’s turn`;
   return snapshot.message;
 }
@@ -276,7 +285,7 @@ function toggle(slot) {
 }
 function actionStrip(filter = () => true) {
   const visible = snapshot.availableActions.filter(choice=>filter(choice)
-    && !["stagePowerTarget","selectPowerOwnCard","acknowledgeSpy"].includes(choice.action));
+    && !["stagePowerTarget","selectPowerOwnCard","acknowledgeSpy","acknowledgePeek"].includes(choice.action));
   if (!visible.length) return null;
   return node("div",{class:"actions"},...visible.map(choice=>{
     let label = labels[choice.action];
@@ -288,6 +297,13 @@ function actionStrip(filter = () => true) {
     const staged = ["confirmSpy","confirmSwap"].includes(choice.action);
     const valid = staged || !choice.max || (selection.length>=choice.min && selection.length<=choice.max
       && selection.every(id=>choice.slots.includes(id)));
+    if (choice.action==="skipTurn") {
+      const actor = snapshot.players.find(player=>player.seatId===snapshot.turnSeatId);
+      label = `Skip ${actor.name}’s turn`;
+      return button(label,()=>{
+        if (window.confirm(`Skip ${actor.name}’s turn? This spends their current turn.`)) submit(choice);
+      },false,busy);
+    }
     return button(label,()=>submit(choice,staged?choice.slots:undefined),
       choice.action!=="pairBoard"&&choice.action!=="revokeBoard",busy||!valid);
   }),visible.some(action=>action.chooseSide)&&selection.length>=2
@@ -314,6 +330,8 @@ function powerPrompt() {
     case "swapSelectingOpponent": return mine?"Choose an opponent card":`${actor} is choosing an opponent card`;
     case "spyReview":
     case "swapReview": return mine?"Review the selected cards":`Waiting for ${actor} to confirm`;
+    case "peekSelecting": return mine?"Choose one of your cards":`${actor} is choosing a card`;
+    case "peekViewing":
     case "spyViewing": return mine?"Finish your private look":`${actor} is finishing their turn`;
     default: return null;
   }
@@ -322,10 +340,11 @@ function powerPrompt() {
 function powerToast() {
   const result = snapshot.privatePowerResult;
   if (!result) return null;
-  if (result.kind==="spy") {
-    const done = snapshot.availableActions.find(choice=>choice.action==="acknowledgeSpy");
+  if (result.kind==="spy" || result.kind==="peek") {
+    const isPeek = result.kind==="peek";
+    const done = snapshot.availableActions.find(choice=>choice.action===(isPeek?"acknowledgePeek":"acknowledgeSpy"));
     return node("aside",{class:"power-toast",role:"status"},
-      `Spy confirmed · ${result.targetName}’s card is ${result.rank}`,
+      isPeek ? `Peek · Your card is ${result.rank}` : `Spy confirmed · ${result.targetName}’s card is ${result.rank}`,
       done?button("Done",()=>submit(done),true,busy):null);
   }
   const receipt = `${snapshot.roomId}:${result.resultId}`;
@@ -380,6 +399,7 @@ function lobbyOrBoard() {
       tabletop(lobby?invite:piles()),
       snapshot.test?node("p",{class:"status"},`TEST room · ${snapshot.test.scenario} · Seed ${snapshot.test.seed}`):null,
       powerPrompt()?node("p",{class:"status",role:"status"},powerPrompt()):null,
+      snapshot.message.endsWith("’s turn was skipped.")?node("p",{class:"status",role:"status"},snapshot.message):null,
       winner?node("p",{},`Winner: ${winner}`):null,
       snapshot.caboCaller?node("p",{},`Cabo · ${snapshot.finalTurns.length} final turns remaining`):null,
       snapshot.availableActions.length?actionStrip():null,
@@ -406,18 +426,19 @@ function phone() {
   const privateResult = powerToast();
   const opening = snapshot.availableActions.some(action=>action.action==="revealInitialCards");
   const prompt = opening?`Choose two cards · ${selection.length} of 2`:snapshot.availableActions.some(action=>action.action==="confirmInitialLook")?"Remember these two cards":powerPrompt() || status();
-  const playingActions = new Set(["pairBoard","revokeBoard"]);
+  const playingActions = new Set(["pairBoard","revokeBoard","skipTurn"]);
   const tableActions = snapshot.availableActions.some(choice=>playingActions.has(choice.action));
   const viewed = !active ? snapshot.players.filter(player=>player.seatId!==me.seatId).flatMap(player=>
     player.cards.flatMap((view,index)=>view.rank===null?[]:[`${player.name} · Card ${index+1} · ${view.rank}`])) : [];
   return node("section",{class:`phone ${active?"active":""}`},top(tableActions),
     node("div",{class:"stage"},piles(active),
       node("div",{class:"hand",style:`--cols:${cols};--size:${size}`},...hand.map((item,index)=>card(item,index,ownChoice?.slots.includes(item.slot)?()=>submit(ownChoice,[item.slot]):
-        !snapshot.pendingPower&&selectableSlots.has(item.slot)?()=>toggle(item.slot):null,
+        (!snapshot.pendingPower || snapshot.pendingPower.phase==="peekSelecting")&&selectableSlots.has(item.slot)?()=>toggle(item.slot):null,
         snapshot.pendingPower?.ownSlot===item.slot||selection.includes(item.slot)))),
       targets.size?node("div",{class:"targets"},...snapshot.players.filter(p=>p.seatId!==me.seatId).flatMap(p=>
         p.cards.map((item,index)=>targets.has(item.slot)?button(`${p.name} · Card ${index+1}`,()=>submit(targetChoice,[item.slot]),snapshot.pendingPower?.targetSlot===item.slot,busy):null))):null),
     node("footer",{},node("p",{class:"status",role:"status"},notice||prompt),
+      !notice&&snapshot.message.endsWith("’s turn was skipped.")?node("p",{role:"status"},snapshot.message):null,
       actionStrip(choice=>!playingActions.has(choice.action)),
       ...viewed.map(label=>node("p",{class:"status"},label)),privateResult),
     tableActions&&tableControlsOpen?node("aside",{class:"table-controls"},actionStrip(choice=>playingActions.has(choice.action)),
@@ -429,7 +450,10 @@ function animateMove(stage, previousCards, previousPiles, move) {
   const easing = "ease-in-out";
   const cards = [...stage.querySelectorAll(".hand .card")];
   for (const card of cards) {
-    const source = previousCards.get(card.dataset.sprite) ||
+    const slot = Number(card.dataset.sprite);
+    const matchSource = move.match?.incomingSlot === slot && move.match.source === "discardTop" ? previousPiles[1] :
+      move.match?.penaltySlot === slot ? previousPiles[0] : null;
+    const source = previousCards.get(card.dataset.sprite) || matchSource ||
       (move.action === "drawDeck" ? previousPiles[0] : move.action === "drawDiscard" ? previousPiles[1] : null);
     if (!source) continue;
     const destination = card.getBoundingClientRect();
@@ -441,7 +465,7 @@ function animateMove(stage, previousCards, previousPiles, move) {
   if (!["callMatch","discardHandCard","discardDrawn"].includes(move.action)) return;
   const remaining = new Set(cards.map(card=>card.dataset.sprite));
   for (const [id, source] of previousCards) {
-    if (remaining.has(id)) continue;
+    if (remaining.has(id) || (move.match && !move.match.discardedSlots.includes(Number(id)))) continue;
     const destination = previousPiles[1];
     const moving = node("div",{class:"card moving-card","aria-hidden":"true",
       style:`left:${source.left}px;top:${source.top}px;width:${source.width}px;height:${source.height}px`},"✦");
