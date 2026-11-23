@@ -236,9 +236,9 @@ function home() {
     else connect(`/api/rooms/${encodeURIComponent(room)}/join`,{name:data.get("name"),direction});
   }},creating?null:field("Room code","room",query.get("room") || "",8),
     mode==="board"?field("Board pairing code","code","",10):field("Your name","name"),
-    mode==="player"?node("label",{},"Seat",node("select",{name:"direction"},
+    mode==="player"?node("label",{},"Seat direction",node("select",{name:"direction","aria-label":"Seat direction"},
       node("option",{value:""},"Any open seat"),
-      ...directions.map(direction=>node("option",{value:direction},seatLabel(direction))))):null,
+      ...compassSeats().map(seat=>node("option",{value:seat.direction},seat.label)))):null,
     node("button",{type:"submit",class:"primary",disabled:busy},creating?"Create room":"Join room"));
   return node("section",{class:"home"},brand,node("h2",{},creating?"Create a game":"Join a game"),form,
     notice?node("p",{role:"status"},notice):null,button("Back",()=>navigate("home")));
@@ -355,15 +355,14 @@ function actionStrip(filter = () => true) {
     let label = labels[choice.action];
     if (choice.action==="beginPlay" && snapshot.round>1) label="Start round";
     if (choice.action==="beginPlay" && choice.max) {
-      const candidates = directions.flatMap(direction=>snapshot.players.filter(player=>
-        player.direction===direction && choice.slots.includes(player.seatId)));
-      const defaultStarter = candidates.length===1 ? candidates[0] :
-        snapshot.test ? candidates.find(player=>!player.bot) : undefined;
+      const candidates = compassSeats(snapshot.players)
+        .filter(({player})=>player && choice.slots.includes(player.seatId));
+      const defaultStarter = candidates.length===1 ? candidates[0].player :
+        snapshot.test ? candidates.find(({player})=>!player.bot)?.player : undefined;
       const selected = choice.slots.includes(starterSeat) ? starterSeat : defaultStarter?.seatId;
       const picker = node("select",{"aria-label":"Starting player",disabled:busy},
         node("option",{value:""},"Choose who starts"),
-        ...candidates.map(player=>node("option",{value:player.seatId},
-          `${seatLabel(player.direction)} · ${player.name}`)));
+        ...candidates.map(seat=>node("option",{value:seat.player.seatId},seat.title)));
       picker.value = selected ?? "";
       picker.addEventListener("change",()=>{
         starterSeat = Number(picker.value) || undefined;
@@ -392,15 +391,23 @@ function actionStrip(filter = () => true) {
     ?button(insertLeft?"Keep failed draw on left":"Keep failed draw on right",()=>{insertLeft=!insertLeft;render();}):null);
 }
 function summary(showCards = false) {
-  return node("div",{class:"seats"},...snapshot.players.map(p=>{
+  const occupied = compassSeats(snapshot.players).filter(seat=>seat.player);
+  return node("div",{class:"seats"},...occupied.map(({player:p,title})=>{
     const result = snapshot.results.find(item=>item.seatId===p.seatId);
     return node("div",{class:`seat ${p.seatId===snapshot.turnSeatId?"current":""}`},
-      node("strong",{},p.name),node("small",{},["initialPreview","readyToStart"].includes(snapshot.phase)?(p.ready?"Ready":"Looking"): `${p.score} points${result?` · +${result.points} this round`:""}`),
+      node("strong",{},title),node("small",{},["initialPreview","readyToStart"].includes(snapshot.phase)?(p.ready?"Ready":"Looking"): `${p.score} points${result?` · +${result.points} this round`:""}`),
       showCards?node("div",{class:"result-cards"},...p.cards.map((item,index)=>card(item,index))):null);
   }));
 }
-const directions = ["north", "east", "south", "west"];
-const seatLabel = direction=>`Seat ${directions.indexOf(direction)+1}`;
+const compassDirections = ["North", "East", "South", "West"];
+
+function compassSeats(players = []) {
+  return compassDirections.map(label=>{
+    const direction = label.toLowerCase();
+    const player = players.find(seat=>seat.direction===direction);
+    return { direction, label, player, title: `${label} · ${player?.name ?? "Open"}` };
+  });
+}
 
 function powerPrompt() {
   const pending = snapshot.pendingPower;
@@ -445,9 +452,7 @@ function tabletop(center, miniature = false) {
   const peekChoice = miniature && snapshot.availableActions.find(choice=>choice.action==="peek");
   const ownChoice = miniature && snapshot.availableActions.find(choice=>choice.action==="selectPowerOwnCard");
   const activePlayer = snapshot.players.find(player=>player.seatId===snapshot.turnSeatId);
-  return node("div",{class:`tabletop ${miniature?"mini-tabletop":""}`},...directions.map(direction=>{
-    const label = seatLabel(direction);
-    const player = snapshot.players.find(seat=>seat.direction===direction);
+  return node("div",{class:`tabletop ${miniature?"mini-tabletop":""}`},...compassSeats(snapshot.players).map(({direction,label,player,title})=>{
     const current = player && player.seatId===snapshot.turnSeatId;
     const hand = current && snapshot.incoming ? [...player.cards, snapshot.incoming] : player?.cards;
     const result = snapshot.results.find(item=>item.seatId===player?.seatId);
@@ -456,7 +461,7 @@ function tabletop(center, miniature = false) {
       snapshot.phase==="readyToStart" ? "Ready to start" :
       snapshot.phase==="roundResults" ? "Round results" :
       snapshot.phase==="gameOver" ? "Game over" : "Lobby");
-    return node("section",{class:`tabletop-seat ${direction} ${current?"current":""}`,"aria-label":label},
+    return node("section",{class:`tabletop-seat ${direction} ${current?"current":""}`,"aria-label":`${label} seat`},
       node("div",{class:"tabletop-seat-content"},
         hand?.length?node("div",{class:"tabletop-hand",style:`--cards:${hand.length}`},
           ...hand.map((item,index)=>{
@@ -468,7 +473,7 @@ function tabletop(center, miniature = false) {
             const label = `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}${lookedAt?", looked at during opening":""}`;
             return card(item,index,pick,selected,label,lookedAt);
           })):null,
-        node("strong",{},miniature ? (player?.name ?? label) : `${label} · ${player?.name ?? "Open"}`),
+        node("strong",{},title),
         player&&!miniature?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null));
   }),node("div",{class:"tabletop-center"},center));
 }
