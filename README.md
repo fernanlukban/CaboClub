@@ -2,6 +2,8 @@
 
 Cabo Club is a Rust web app for playing Cabo with friends. The Bevy browser demo and Axum hosting scaffold are in place. See [SPEC.md](SPEC.md) for the multiplayer milestones and the full-snapshot and action contract shared by browser and future native clients.
 
+[Tabletop mode](SPEC.md#tabletop-mode) is planned for an iPad shared board with private player hands on landscape phones.
+
 | Crate | Responsibility |
 | --- | --- |
 | `app/` | Bevy WebAssembly client |
