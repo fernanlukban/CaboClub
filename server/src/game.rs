@@ -94,10 +94,10 @@ enum TurnStep {
     Incoming { card: Card, from_deck: bool },
     MatchFlipping,
     Peek(u64),
-    PeekViewing(u64, u8),
+    PeekViewing(u64, Card),
     SpySelecting(u64),
     SpyReview(u64, u32),
-    SpyViewing(u64, usize, u8),
+    SpyViewing(u64, usize, Card),
     SwapSelectingOwn(u64),
     SwapSelectingOpponent(u64, u32),
     SwapReview(u64, u32, u32),
@@ -1095,7 +1095,7 @@ impl Room {
                     .find(|c| c.slot == command.slots[0])
                     .unwrap();
                 let id = round.step.power().unwrap().0;
-                round.step = TurnStep::PeekViewing(id, card.rank);
+                round.step = TurnStep::PeekViewing(id, card);
                 return "A player is finishing a private look.";
             }
             SelectPowerOwnCard => {
@@ -1118,7 +1118,7 @@ impl Room {
             }
             ConfirmSpy => {
                 let (id, _, _, _) = round.step.power().unwrap();
-                let (owner, rank) = self
+                let (owner, card) = self
                     .players
                     .iter()
                     .enumerate()
@@ -1127,10 +1127,10 @@ impl Room {
                             .hand
                             .iter()
                             .find(|c| c.slot == command.slots[0])
-                            .map(|card| (i, card.rank))
+                            .map(|card| (i, *card))
                     })
                     .unwrap();
-                round.step = TurnStep::SpyViewing(id, owner, rank);
+                round.step = TurnStep::SpyViewing(id, owner, card);
                 return "A player is finishing a private look.";
             }
             AcknowledgePeek | AcknowledgeSpy => "A player finished looking.",
@@ -1352,19 +1352,21 @@ impl Room {
         });
         let private_power_result = round
             .and_then(|round| match round.step {
-                TurnStep::PeekViewing(id, rank) if viewer == Some(round.turn) => {
+                TurnStep::PeekViewing(id, card) if viewer == Some(round.turn) => {
                     Some(PowerResult {
                         result_id: id,
                         kind: "peek",
-                        rank: Some(rank),
+                        slot: Some(card.slot),
+                        rank: Some(card.rank),
                         target_name: None,
                     })
                 }
-                TurnStep::SpyViewing(id, target, rank) if viewer == Some(round.turn) => {
+                TurnStep::SpyViewing(id, target, card) if viewer == Some(round.turn) => {
                     Some(PowerResult {
                         result_id: id,
                         kind: "spy",
-                        rank: Some(rank),
+                        slot: Some(card.slot),
+                        rank: Some(card.rank),
                         target_name: Some(self.players[target].name.clone()),
                     })
                 }
@@ -1375,6 +1377,7 @@ impl Room {
                 Some(PowerResult {
                     result_id: id,
                     kind: "swap",
+                    slot: None,
                     rank: None,
                     target_name: None,
                 })
@@ -1597,12 +1600,10 @@ mod tests {
         );
         room.command(&actor, Role::Seat(0), confirm.clone())
             .unwrap();
+        let reveal = room.snapshot(Role::Seat(0)).private_power_result.unwrap();
         assert_eq!(
-            room.snapshot(Role::Seat(0))
-                .private_power_result
-                .unwrap()
-                .rank,
-            Some(target.rank)
+            (reveal.slot, reveal.rank),
+            (Some(target.slot), Some(target.rank))
         );
         assert!(
             room.snapshot(Role::CreatorBoard)
@@ -1960,7 +1961,11 @@ mod tests {
         run(&mut room, Role::Seat(0), Action::Peek, vec![target.slot]);
         let actor = room.snapshot(Role::Seat(0));
         assert_eq!(actor.phase, "playing");
-        assert_eq!(actor.private_power_result.unwrap().rank, Some(target.rank));
+        let reveal = actor.private_power_result.unwrap();
+        assert_eq!(
+            (reveal.slot, reveal.rank),
+            (Some(target.slot), Some(target.rank))
+        );
         for role in [Role::Seat(1), Role::CreatorBoard] {
             assert!(room.snapshot(role).private_power_result.is_none());
         }

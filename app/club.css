@@ -109,8 +109,8 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 .match-reveal{display:flex;justify-content:center;flex-wrap:wrap;gap:4px;width:min(90vw,42rem)}
 .match-reveal .card{--card-width:min(5.4vw,10dvh);font-size:clamp(.68rem,4vmin,1.6rem)}
 @media (prefers-reduced-motion:no-preference){
-  .card.match-flipping{animation:match-flip .42s ease-in-out}
-  .card.match-flipping::before{content:"✦";position:absolute;inset:0;display:grid;place-items:center;border-radius:inherit;background:repeating-linear-gradient(45deg,#254c42 0 5px,#335c4d 5px 10px);color:#f1d6a1;z-index:1;animation:match-back .42s step-end both}
+  .card.card-flipping{animation:match-flip .42s ease-in-out}
+  .card.card-flipping::before{content:"✦";position:absolute;inset:0;display:grid;place-items:center;border-radius:inherit;background:repeating-linear-gradient(45deg,#254c42 0 5px,#335c4d 5px 10px);color:#f1d6a1;z-index:1;animation:match-back .42s step-end both}
 }
 @keyframes match-flip{0%,100%{transform:rotateY(0)}50%{transform:rotateY(90deg)}}
 @keyframes match-back{0%{visibility:visible}50%,100%{visibility:hidden}}
@@ -163,3 +163,5 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 .stage .mini-tabletop .piles .card {
   --card-width: clamp(22px, 7dvh, 34px);
 }
+
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}

@@ -163,6 +163,7 @@ pub struct PendingPower {
 pub struct PowerResult {
     pub result_id: u64,
     pub kind: &'static str,
+    pub slot: Option<u32>,
     pub rank: Option<u8>,
     pub target_name: Option<String>,
 }

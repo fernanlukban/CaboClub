@@ -10,7 +10,7 @@ Product and protocol spec for [Cabo Club](SPEC.md). Spy and Swap use shared targ
 | Select own card for Swap | Tap one own card. Show **Choose a card to give** until selected. | Show **Waiting for [name] to choose their card**. | Keep normal waiting view. |
 | Select opponent card | Show **Choose an opponent card** and highlight eligible slots. The player can tap the same compass seat on the phone’s mini table or use the iPad. | Enable only eligible opponent card backs. Tapping one highlights the same slot on both devices. | Keep normal waiting view. |
 | Review | Show **Confirm Spy** or **Confirm Swap**. Allow a new target or **Change my card** for Swap. | Show **Waiting for [name] to confirm**. | Keep normal waiting view. |
-| Spy result | Show a private toast with the rank, for example **Spy confirmed · Bea’s card is 7**. Tap **Done** to hide it and pass the turn. | Show **[Name] is finishing their turn**. Clear target highlights when the reveal begins. | See waiting state only. |
+| Spy result | Flip the target face up on the actor’s phone. Tap **Done** to hide it and pass the turn. Peek uses the same private flip for one of the actor’s own cards. | Show **[Name] is finishing their turn**. Clear target highlights when the reveal begins. | See waiting state only. |
 | Swap result | Show **Swap complete** as a private toast. Animate the two cards trading places without showing ranks. | Animate the public card backs moving and highlight the next turn. | The affected player sees their hand update without revealing either rank. |
 
 An iPad tap stages a target. The initiating phone confirms it. This lets a player use either screen while keeping a shared-screen mis-tap recoverable. No additional confirmation is necessary after **Confirm Swap**. The **Done** button in Spy closes a private look. It is not a second confirmation of the target.
@@ -44,7 +44,7 @@ Keep complete snapshots for both roles. [Wire fixtures](shared/fixtures/tabletop
 | Contract | Shape and visibility |
 | --- | --- |
 | `pendingPower` | `powerId`, kind, actor seat, and phase. Project only what each device needs. The actor gets their selected own slot and staged target. The board gets staged target and eligible opponent slots through its descriptor. Other seats see public progress only. |
-| `privatePowerResult` | Actor only. Contains result ID, kind, and the Spy rank until acknowledged. Swap includes its success receipt without ranks. Use the result ID to deduplicate toasts after polling or a command retry. |
+| `privatePowerResult` | Actor only. Contains result ID and kind. Peek and Spy also return the private card slot and rank until acknowledged. Swap includes its success receipt without ranks. Use the result ID to deduplicate toasts after polling or a command retry. |
 | `selectPowerOwnCard` | Actor only. Pick one own slot. |
 | `stagePowerTarget` | Actor or scoped board during an eligible selection state. Pick one opponent slot from `availableActions`. |
 | `confirmSpy`, `confirmSwap` | Actor only. Echo the exact staged selection. |

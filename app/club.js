@@ -35,6 +35,7 @@ let insertLeft = false;
 let tableControlsOpen = false;
 let moveAnimation;
 let animateMatchFlip = false;
+let privateFlipSlot;
 let animateTabletopSwap = false;
 
 const labels = {
@@ -116,6 +117,9 @@ function accept(next, force = false, renderNow = true) {
   } else if (snapshot?.matchOutcome && notice === snapshot.message) {
     notice = "";
   }
+  const look = next.privatePowerResult;
+  privateFlipSlot = snapshot?.roomId===next.roomId && look?.slot != null
+    && look.resultId !== snapshot.privatePowerResult?.resultId ? look.slot : undefined;
   snapshot = next;
   if (renderNow) render();
 }
@@ -294,14 +298,15 @@ function top(showTableControls = false) {
     node("span",{},`${snapshot.roomCode} · ${snapshot.round ? "Round " + snapshot.round : "Lobby"}`),
     node("div",{class:"top-controls"},snapshot.test?button("Game log",openGameLog):null,showTableControls?button("Table",()=>{tableControlsOpen=!tableControlsOpen;render();}):null,button("Leave",()=>leave())));
 }
-function card(view, index = 0, action, selected = false, name, lookedAt = false) {
+function card(view, index = 0, action, selected = false, name, lookedAt = false, privateLook = false) {
   const rank = view?.rank;
   const face = rank !== null && rank !== undefined;
-  const flipping = animateMatchFlip && snapshot.matchFlip.newlyFaceUpSlots.includes(view?.slot);
+  const flipping = (animateMatchFlip && snapshot.matchFlip.newlyFaceUpSlots.includes(view?.slot))
+    || (privateLook && privateFlipSlot===view.slot);
   const props = mode==="board" && !action ? { role:"img" } :
     { type:"button", "aria-pressed":String(selected), disabled:!action || busy, click:action ?? (()=>{}) };
   return node(mode==="board"&&!action?"div":"button",{
-    ...props,class:`card ${face?"face":""} ${selected?"selected":""} ${view?"":"empty"} ${flipping?"match-flipping":""} ${lookedAt?"opening-looked":""}`,
+    ...props,class:`card ${face?"face":""} ${selected?"selected":""} ${view?"":"empty"} ${flipping?"card-flipping":""} ${lookedAt?"opening-looked":""}`,
     "aria-label": name || `Card ${index+1}${face?", rank "+rank:", face down"}`,
     style:`--index:${index}`,
     "data-sprite":view?.slot === undefined ? (name ?? `card-${index}`) : String(view.slot),
@@ -434,7 +439,8 @@ function powerToast() {
     const isPeek = result.kind==="peek";
     const done = snapshot.availableActions.find(choice=>choice.action===(isPeek?"acknowledgePeek":"acknowledgeSpy"));
     return node("aside",{class:"power-toast",role:"status"},
-      isPeek ? `Peek · Your card is ${result.rank}` : `Spy confirmed · ${result.targetName}’s card is ${result.rank}`,
+      isPeek ? "Peek · Private look" : `Spy · ${result.targetName}’s card`,
+      node("span",{class:"visually-hidden"},`Rank ${result.rank}`),
       done?button("Done",()=>submit(done),true,busy):null);
   }
   const receipt = `${snapshot.roomId}:${result.resultId}`;
@@ -451,6 +457,7 @@ function tabletop(center, miniature = false) {
   const targetChoice = snapshot.availableActions.find(choice=>choice.action==="stagePowerTarget");
   const peekChoice = miniature && snapshot.availableActions.find(choice=>choice.action==="peek");
   const ownChoice = miniature && snapshot.availableActions.find(choice=>choice.action==="selectPowerOwnCard");
+  const look = miniature ? snapshot.privatePowerResult : null;
   const activePlayer = snapshot.players.find(player=>player.seatId===snapshot.turnSeatId);
   return node("div",{class:`tabletop ${miniature?"mini-tabletop":""}`},...compassSeats(snapshot.players).map(({direction,label,player,title})=>{
     const current = player && player.seatId===snapshot.turnSeatId;
@@ -470,8 +477,10 @@ function tabletop(center, miniature = false) {
             const selected = snapshot.pendingPower?.targetSlot===item.slot
               || (miniature && (snapshot.pendingPower?.ownSlot===item.slot || selection.includes(item.slot)));
             const lookedAt = player.openingLookSlots?.includes(item.slot);
-            const label = `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}${lookedAt?", looked at during opening":""}`;
-            return card(item,index,pick,selected,label,lookedAt);
+            const privateLook = look?.slot===item.slot;
+            const visibleCard = privateLook ? { ...item, rank:look.rank } : item;
+            const label = `${player.name} · Card ${index+1}${visibleCard.rank===null?", face down":", rank "+visibleCard.rank}${lookedAt?", looked at during opening":""}`;
+            return card(visibleCard,index,pick,selected||privateLook,label,lookedAt,privateLook && item.rank===null);
           })):null,
         node("strong",{},title),
         player&&!miniature?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null));
