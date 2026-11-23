@@ -1,0 +1,11 @@
+[package]
+name = "cabo-club"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.17.3", default-features = false, features = [
+    "bevy_asset", "bevy_camera", "bevy_color", "bevy_core_pipeline",
+    "bevy_render", "bevy_sprite", "bevy_sprite_render", "bevy_window",
+    "bevy_winit", "webgl2", "x11"
+] }
