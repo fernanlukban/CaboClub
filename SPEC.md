@@ -64,6 +64,10 @@ Send the selected slot references with `callMatch`. Derive the incoming source f
 
 From the first deal through scoring, the discard pile always has a visible top. Taking its last card reveals the next deck card as a replacement in the same mutation. On a failed match that consumes the last discard, refill before drawing an extra penalty card. If the refill uses the final deck card, finish the pending move before scoring. The replacement itself never triggers a power.
 
+### Card movement hints
+
+Snapshots include `incomingSource` while a player holds a draw. The board can animate a back from the deck using this field. The deck card’s slot and rank remain private. The staged Spy target slot stays available to the board during the private look so its face-down card can travel and return. The private result remains actor-only.
+
 ### Shared match reveal and public cards
 
 Accepting `callMatch` enters a server-owned match flip for 2.6 seconds. The turn and card locations stay fixed while the selected cards become public. The next server tick after the deadline resolves the match, applies any penalty, and advances or scores once. Repeat requests replay the original acceptance. Gameplay and host skip stay unavailable during the reveal.

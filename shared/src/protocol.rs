@@ -208,6 +208,8 @@ pub struct Snapshot {
     pub deck_count: usize,
     pub discard_top: Option<u8>,
     pub incoming: Option<CardView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming_source: Option<&'static str>,
     pub pending_power: Option<PendingPower>,
     pub private_power_result: Option<PowerResult>,
     #[serde(skip_serializing_if = "Option::is_none")]

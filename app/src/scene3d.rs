@@ -4,6 +4,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use bevy::{
     asset::RenderAssetUsages,
     camera::ScalingMode,
+    core_pipeline::tonemapping::Tonemapping,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
@@ -39,6 +40,7 @@ struct MatchFlip {
 #[serde(rename_all = "camelCase")]
 struct PendingPower {
     power_id: u64,
+    actor_seat_id: u64,
     phase: String,
     own_slot: Option<u32>,
     target_slot: Option<u32>,
@@ -65,6 +67,14 @@ struct PrivateLook {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct MatchOutcome {
+    source: String,
+    incoming_slot: u32,
+    penalty_slot: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SceneSnapshot {
     room_id: String,
     deal_id: Option<u64>,
@@ -77,6 +87,8 @@ struct SceneSnapshot {
     deck_count: usize,
     discard_top: Option<u8>,
     incoming: Option<CardView>,
+    incoming_source: Option<String>,
+    match_outcome: Option<MatchOutcome>,
     match_flip: Option<MatchFlip>,
     pending_power: Option<PendingPower>,
     private_power_result: Option<PrivateLook>,
@@ -102,6 +114,8 @@ struct Scene {
     seen_flip: Option<u64>,
     cards: HashMap<CardKey, Entity>,
     width: f32,
+    revision: Option<u64>,
+    owners: HashMap<u32, u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -123,6 +137,10 @@ struct Placement {
     marked: bool,
     flip: bool,
     interactive: bool,
+    home: Vec3,
+    home_rotation: f32,
+    home_size: f32,
+    inspecting: bool,
 }
 
 #[derive(Component)]
@@ -130,6 +148,37 @@ struct SceneCard {
     placement: Placement,
     front: Entity,
     elapsed: f32,
+    motion: Motion,
+    exiting: bool,
+}
+
+impl SceneCard {
+    fn flip_delay(&self) -> f32 {
+        if self.placement.inspecting {
+            self.motion.duration * 0.65
+        } else {
+            0.0
+        }
+    }
+}
+
+struct Motion {
+    origin: Transform,
+    elapsed: f32,
+    duration: f32,
+    lift: f32,
+}
+
+impl Motion {
+    fn new(origin: Transform, target: Vec3) -> Self {
+        let distance = origin.translation.distance(target);
+        Self {
+            origin,
+            elapsed: 0.0,
+            duration: (0.22 + distance * 0.035).min(0.58),
+            lift: (distance * 0.11).min(0.65),
+        }
+    }
 }
 
 #[derive(Component)]
@@ -192,6 +241,7 @@ fn setup(
 ) {
     commands.spawn((
         Camera3d::default(),
+        Tonemapping::None,
         Projection::Orthographic(OrthographicProjection {
             scaling_mode: ScalingMode::FixedVertical {
                 viewport_height: 12.0,
@@ -352,6 +402,38 @@ fn layout(frame: &Frame, width: f32, new_flip: bool) -> Vec<Placement> {
     let closing_look = pending.is_some_and(|command| command.action == Action::ConfirmInitialLook)
         && snapshot.phase == "initialPreview";
     let optimistic = pending.filter(|command| command.expected_revision == snapshot.revision);
+    let viewing_slot = snapshot
+        .private_power_result
+        .as_ref()
+        .filter(|_| mini && !is_board)
+        .and_then(|look| look.slot)
+        .or_else(|| {
+            snapshot
+                .pending_power
+                .as_ref()
+                .filter(|power| {
+                    (mini || is_board) && matches!(power.phase.as_str(), "spyReview" | "spyViewing")
+                })
+                .and_then(|power| power.target_slot)
+        });
+    let actor = snapshot.pending_power.as_ref().and_then(|power| {
+        snapshot
+            .players
+            .iter()
+            .find(|p| p.seat_id == power.actor_seat_id)
+    });
+    let viewing_position = if is_board {
+        let toward = match actor.map(|player| player.direction) {
+            Some(Direction::North) => Vec3::NEG_Z,
+            Some(Direction::South) => Vec3::Z,
+            Some(Direction::West) => Vec3::NEG_X,
+            Some(Direction::East) => Vec3::X,
+            None => Vec3::ZERO,
+        };
+        toward * 1.7 + Vec3::Y * 0.48
+    } else {
+        Vec3::new(0.0, 0.48, 1.35)
+    };
     let mut placements = vec![];
     let mut row = |cards: &[&CardView],
                    origin: Vec3,
@@ -389,19 +471,21 @@ fn layout(frame: &Frame, width: f32, new_flip: bool) -> Vec<Placement> {
             let matching = optimistic.is_some_and(|command| {
                 command.action == Action::CallMatch && command.slots.contains(&card.slot)
             });
-            let position = if outgoing {
+            let home = origin + rotation * local;
+            let inspecting = viewing_slot == Some(card.slot) && !copies;
+            let position = if inspecting {
+                viewing_position
+            } else if outgoing {
                 Vec3::new(0.75, 0.16, -1.35)
             } else {
-                origin
-                    + rotation * local
-                    + Vec3::Y
-                        * if matching {
-                            0.40
-                        } else if selected {
-                            0.20
-                        } else {
-                            0.0
-                        }
+                home + Vec3::Y
+                    * if matching {
+                        0.40
+                    } else if selected {
+                        0.20
+                    } else {
+                        0.0
+                    }
             };
             placements.push(Placement {
                 key: if copies {
@@ -415,8 +499,12 @@ fn layout(frame: &Frame, width: f32, new_flip: bool) -> Vec<Placement> {
                     private_rank.or(card.rank)
                 },
                 position,
-                rotation: angle,
-                size,
+                rotation: if inspecting && !is_board { 0.0 } else { angle },
+                size: if inspecting { size * 1.3 } else { size },
+                home,
+                home_rotation: angle,
+                home_size: size,
+                inspecting,
                 marked: selected || marked.is_some_and(|pair| pair.contains(&card.slot)),
                 flip: new_flip
                     && snapshot
@@ -425,6 +513,7 @@ fn layout(frame: &Frame, width: f32, new_flip: bool) -> Vec<Placement> {
                         .is_some_and(|flip| flip.newly_face_up_slots.contains(&card.slot)),
                 interactive: !frame.busy
                     && !copies
+                    && !inspecting
                     && snapshot.available_actions.iter().any(|action| {
                         !matches!(
                             action.action.as_str(),
@@ -528,6 +617,10 @@ fn layout(frame: &Frame, width: f32, new_flip: bool) -> Vec<Placement> {
                 position: Vec3::new(x, 0.0, if is_board || mini { 0.0 } else { -1.35 }),
                 rotation: 0.0,
                 size: 0.9,
+                home: Vec3::ZERO,
+                home_rotation: 0.0,
+                home_size: 0.9,
+                inspecting: false,
                 marked: false,
                 flip: false,
                 interactive: !frame.busy
@@ -538,20 +631,43 @@ fn layout(frame: &Frame, width: f32, new_flip: bool) -> Vec<Placement> {
             });
         }
     }
-    if active
+    let pending_deck = active
         && !mini
         && snapshot.incoming.is_none()
-        && optimistic.is_some_and(|command| command.action == Action::DrawDeck)
-    {
+        && optimistic.is_some_and(|command| command.action == Action::DrawDeck);
+    let hidden_deck = is_board
+        && snapshot.incoming.is_none()
+        && snapshot.incoming_source.as_deref() == Some("deck");
+    if pending_deck || hidden_deck {
+        let actor_direction = snapshot
+            .players
+            .iter()
+            .find(|p| Some(p.seat_id) == snapshot.turn_seat_id)
+            .map(|p| p.direction);
+        let (position, rotation) = if hidden_deck {
+            let horizontal = (width * 0.34).min(7.0);
+            match actor_direction {
+                Some(Direction::North) => (Vec3::new(0.0, 0.2, -1.7), PI),
+                Some(Direction::East) => (Vec3::new(horizontal - 1.1, 0.2, 0.0), -FRAC_PI_2),
+                Some(Direction::West) => (Vec3::new(1.1 - horizontal, 0.2, 0.0), FRAC_PI_2),
+                _ => (Vec3::new(0.0, 0.2, 1.7), 0.0),
+            }
+        } else {
+            (Vec3::new(width * 0.26, 0.0, 1.6), 0.0)
+        };
         placements.push(Placement {
             key: CardKey::PendingDraw,
             rank: None,
-            position: Vec3::new(width * 0.32, 0.0, 1.6),
-            rotation: 0.0,
-            size: 1.25,
+            position,
+            rotation,
+            size: if is_board { 0.9 } else { 1.25 },
             marked: false,
             flip: false,
             interactive: false,
+            home: position,
+            home_rotation: rotation,
+            home_size: 0.9,
+            inspecting: false,
         });
     }
     placements
@@ -564,6 +680,7 @@ fn reconcile(
     window: Single<&Window>,
     mut cards: Query<
         (
+            Entity,
             &mut SceneCard,
             &mut Transform,
             &mut MeshMaterial3d<StandardMaterial>,
@@ -622,23 +739,94 @@ fn reconcile(
         width,
         flip.is_some() && (reset || flip != scene.seen_flip),
     );
-    let incoming_slot = frame
-        .snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.incoming.as_ref().map(|card| card.slot));
+    let view = frame.snapshot.as_ref();
+    let incoming_slot = view.and_then(|snapshot| snapshot.incoming.as_ref().map(|card| card.slot));
+    let draw_source =
+        if view.and_then(|snapshot| snapshot.incoming_source.as_deref()) == Some("discard") {
+            CardKey::Discard
+        } else {
+            CardKey::Deck
+        };
+    let match_outcome = view
+        .and_then(|snapshot| snapshot.match_outcome.as_ref())
+        .map(|result| {
+            (
+                result.source == "discardTop",
+                result.incoming_slot,
+                result.penalty_slot,
+            )
+        });
+    let owners: HashMap<_, _> = view
+        .into_iter()
+        .flat_map(|view| &view.players)
+        .flat_map(|player| player.cards.iter().map(|card| (card.slot, player.seat_id)))
+        .collect();
+    let revision = view.map(|snapshot| snapshot.revision);
+    let changed_revision = revision != scene.revision;
+    let deal = reset
+        && view.is_some_and(|snapshot| snapshot.phase == "initialPreview")
+        && scene
+            .room
+            .as_ref()
+            .zip(room.as_ref())
+            .is_some_and(|(from, to)| from.0 == to.0);
+    let previous_transforms: HashMap<_, _> = scene
+        .cards
+        .iter()
+        .filter_map(|(&key, &entity)| {
+            cards
+                .get(entity)
+                .ok()
+                .map(|(_, _, transform, _)| (key, *transform))
+        })
+        .collect();
+    let previous_owners = std::mem::replace(&mut scene.owners, owners);
     if reset {
+        for (entity, card, _, _) in &cards {
+            if card.exiting {
+                commands.entity(entity).despawn();
+            }
+        }
         for (_, entity) in scene.cards.drain() {
             commands.entity(entity).despawn();
         }
     }
     scene.room = room;
     scene.seen_flip = flip;
+    scene.revision = revision;
     let mut old_cards = std::mem::take(&mut scene.cards);
-    if let Some(slot) = incoming_slot {
-        if let Some(entity) = old_cards.remove(&CardKey::PendingDraw) {
-            old_cards.insert(CardKey::Hand(slot), entity);
+    let has_pending = placements
+        .iter()
+        .any(|placement| placement.key == CardKey::PendingDraw);
+    if !reset && !has_pending {
+        let kept_hidden_draw = if changed_revision
+            && incoming_slot.is_none()
+            && old_cards.contains_key(&CardKey::PendingDraw)
+        {
+            placements.iter().find_map(|placement| match placement.key {
+                CardKey::Hand(slot)
+                    if scene.owners.contains_key(&slot) && !previous_owners.contains_key(&slot) =>
+                {
+                    Some(slot)
+                }
+                _ => None,
+            })
+        } else {
+            None
+        };
+        if let Some(slot) = incoming_slot.or(kept_hidden_draw) {
+            if let Some(entity) = old_cards.remove(&CardKey::PendingDraw) {
+                old_cards.insert(CardKey::Hand(slot), entity);
+            }
         }
     }
+    let pile_position = |key| previous_transforms.get(&key).map(|t| t.translation);
+    let discard_position = placements
+        .iter()
+        .find(|p| p.key == CardKey::Discard)
+        .map(|p| p.position)
+        .or_else(|| pile_position(CardKey::Discard))
+        .unwrap_or(Vec3::new(0.75, 0.0, 0.0));
     for placement in placements {
         let material = if placement.marked {
             &materials.gold
@@ -650,11 +838,17 @@ fn reconcile(
             .and_then(|rank| materials.ranks.get(rank as usize))
             .unwrap_or(&materials.back);
         let entity = if let Some(entity) = old_cards.remove(&placement.key) {
-            if let Ok((mut card, mut transform, mut edge)) = cards.get_mut(entity) {
+            if let Ok((_, mut card, transform, mut edge)) = cards.get_mut(entity) {
                 let opening = card.placement.rank.is_none() && placement.rank.is_some();
-                let retained_flip = card.elapsed < 0.42
+                let retained_flip = card.elapsed < 0.42 + card.flip_delay()
                     && card.placement.flip
                     && card.placement.rank == placement.rank;
+                if card.placement.position != placement.position
+                    || card.placement.rotation != placement.rotation
+                    || card.placement.size != placement.size
+                {
+                    card.motion = Motion::new(*transform, placement.position);
+                }
                 card.placement = Placement {
                     flip: placement.flip || opening || retained_flip,
                     ..placement
@@ -666,7 +860,6 @@ fn reconcile(
                 if let Ok(mut front) = faces.get_mut(card.front) {
                     front.0 = face_material.clone();
                 }
-                transform.scale = Vec3::splat(placement.size);
             }
             entity
         } else {
@@ -684,62 +877,166 @@ fn reconcile(
             };
             let front = commands.spawn(surface(face_material.clone(), false)).id();
             let back = commands.spawn(surface(materials.back.clone(), true)).id();
-            let origin =
-                if !reset && matches!(placement.key, CardKey::Hand(_) | CardKey::PendingDraw) {
-                    old_cards
-                        .get(&CardKey::Deck)
-                        .and_then(|&entity| cards.get(entity).ok())
-                        .map_or(placement.position, |(_, transform, _)| {
-                            transform.translation
-                        })
+            let source = match placement.key {
+                CardKey::PendingDraw => Some(CardKey::Deck),
+                CardKey::Hand(_) if deal => Some(CardKey::Deck),
+                CardKey::Hand(slot) if changed_revision && incoming_slot == Some(slot) => {
+                    Some(draw_source)
+                }
+                CardKey::Hand(slot) if changed_revision => {
+                    match_outcome.and_then(|(from_discard, incoming, penalty)| {
+                        if penalty == Some(slot) {
+                            Some(CardKey::Deck)
+                        } else if from_discard && incoming == slot {
+                            Some(CardKey::Discard)
+                        } else {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            };
+            let origin = source.and_then(pile_position).unwrap_or_else(|| {
+                if deal {
+                    Vec3::new(-0.75, 0.0, 0.0)
                 } else {
                     placement.position
-                };
+                }
+            });
+            let transform = Transform::from_translation(origin)
+                .with_rotation(Quat::from_rotation_y(placement.rotation))
+                .with_scale(Vec3::splat(placement.size));
+            let mut motion = Motion::new(transform, placement.position);
+            if deal {
+                if matches!(placement.key, CardKey::Hand(_)) {
+                    motion.elapsed = -0.035 * (scene.cards.len() as f32);
+                }
+            }
             commands
                 .spawn((
                     SceneCard {
                         placement,
                         front,
                         elapsed: 0.0,
+                        motion,
+                        exiting: false,
                     },
                     Mesh3d(materials.body.clone()),
                     MeshMaterial3d(material.clone()),
-                    Transform::from_translation(origin)
-                        .with_rotation(Quat::from_rotation_y(placement.rotation))
-                        .with_scale(Vec3::splat(placement.size)),
+                    transform,
                 ))
                 .add_children(&[front, back])
                 .id()
         };
         scene.cards.insert(placement.key, entity);
     }
-    for (_, entity) in old_cards {
-        commands.entity(entity).despawn();
+    for (key, entity) in old_cards {
+        let Ok((_, mut card, transform, _)) = cards.get_mut(entity) else {
+            continue;
+        };
+        let destination = if card.placement.inspecting
+            && matches!(key, CardKey::Hand(slot) if scene.owners.contains_key(&slot))
+        {
+            Some(card.placement.home)
+        } else if !reset && changed_revision {
+            match key {
+                CardKey::Hand(slot) | CardKey::Match(slot) if !scene.owners.contains_key(&slot) => {
+                    Some(discard_position)
+                }
+                CardKey::PendingDraw if revision.is_some() && incoming_slot.is_none() => {
+                    Some(discard_position)
+                }
+                CardKey::Hand(slot) => scene
+                    .owners
+                    .get(&slot)
+                    .zip(previous_owners.get(&slot))
+                    .and_then(|(new, old)| {
+                        if new == old {
+                            return None;
+                        }
+                        scene.owners.iter().find_map(|(&other, owner)| {
+                            (owner == old && previous_owners.get(&other) == Some(new))
+                                .then(|| {
+                                    previous_transforms
+                                        .get(&CardKey::Hand(other))
+                                        .map(|t| t.translation)
+                                })
+                                .flatten()
+                        })
+                    }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(target) = destination {
+            if let Ok(mut front) = faces.get_mut(card.front) {
+                front.0 = materials.back.clone();
+            }
+            card.placement.position = target;
+            card.placement.rank = None;
+            card.placement.flip = false;
+            card.placement.interactive = false;
+            card.placement.rotation = if card.placement.inspecting {
+                card.placement.home_rotation
+            } else {
+                0.0
+            };
+            card.placement.size = if card.placement.inspecting {
+                card.placement.home_size
+            } else {
+                0.9
+            };
+            card.placement.inspecting = false;
+            card.motion = Motion::new(*transform, target);
+            card.exiting = true;
+        } else {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
-fn animate(time: Res<Time>, scene: Res<Scene>, mut cards: Query<(&mut SceneCard, &mut Transform)>) {
+fn animate(
+    mut commands: Commands,
+    time: Res<Time>,
+    scene: Res<Scene>,
+    mut cards: Query<(Entity, &mut SceneCard, &mut Transform)>,
+) {
     let reduced = scene
         .frame
         .as_ref()
         .is_some_and(|frame| frame.reduced_motion);
-    for (mut card, mut transform) in &mut cards {
+    for (entity, mut card, mut transform) in &mut cards {
         let target = card.placement.position;
-        let weight = if reduced {
+        card.motion.elapsed += time.delta_secs();
+        let t = if reduced {
             1.0
         } else {
-            1.0 - (-time.delta_secs() * 14.0).exp()
+            (card.motion.elapsed / card.motion.duration).clamp(0.0, 1.0)
         };
-        transform.translation = transform.translation.lerp(target, weight);
-        card.elapsed += time.delta_secs();
-        let angle = if card.placement.flip && !reduced {
-            PI * (1.0 - (card.elapsed / 0.42).min(1.0))
+        let ease = t * t * (3.0 - 2.0 * t);
+        let arc = (PI * t).sin() * card.motion.lift;
+        let delta = target - card.motion.origin.translation;
+        let side = Vec3::new(delta.z, 0.0, -delta.x).normalize_or_zero();
+        transform.translation =
+            card.motion.origin.translation.lerp(target, ease) + (Vec3::Y + side * 0.32) * arc;
+        transform.scale = card
+            .motion
+            .origin
+            .scale
+            .lerp(Vec3::splat(card.placement.size), ease);
+        let yaw = Quat::from_rotation_y(card.placement.rotation);
+        if card.placement.flip && !reduced {
+            let flip_delay = card.flip_delay();
+            card.elapsed += time.delta_secs();
+            let angle = PI * (1.0 - ((card.elapsed - flip_delay) / 0.42).clamp(0.0, 1.0));
+            transform.rotation = yaw * Quat::from_rotation_z(angle);
         } else {
-            0.0
-        };
-        let rotation =
-            Quat::from_rotation_y(card.placement.rotation) * Quat::from_rotation_z(angle);
-        transform.rotation = rotation;
+            transform.rotation = card.motion.origin.rotation.slerp(yaw, ease);
+        }
+        if card.exiting && t >= 1.0 {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
