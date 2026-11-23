@@ -292,7 +292,7 @@ async function openGameLog() {
 function top(showTableControls = false) {
   return node("header",{class:"top"},node("span",{class:"brand"},"Cabo Club"),
     node("span",{},`${snapshot.roomCode} · ${snapshot.round ? "Round " + snapshot.round : "Lobby"}`),
-    node("div",{class:"top-controls"},button("Game log",openGameLog),showTableControls?button("Table",()=>{tableControlsOpen=!tableControlsOpen;render();}):null,button("Leave",()=>leave())));
+    node("div",{class:"top-controls"},snapshot.test?button("Game log",openGameLog):null,showTableControls?button("Table",()=>{tableControlsOpen=!tableControlsOpen;render();}):null,button("Leave",()=>leave())));
 }
 function card(view, index = 0, action, selected = false, name, lookedAt = false) {
   const rank = view?.rank;
@@ -357,7 +357,9 @@ function actionStrip(filter = () => true) {
     if (choice.action==="beginPlay" && choice.max) {
       const candidates = directions.flatMap(direction=>snapshot.players.filter(player=>
         player.direction===direction && choice.slots.includes(player.seatId)));
-      const selected = candidates.length===1 ? candidates[0].seatId : starterSeat;
+      const defaultStarter = candidates.length===1 ? candidates[0] :
+        snapshot.test ? candidates.find(player=>!player.bot) : undefined;
+      const selected = choice.slots.includes(starterSeat) ? starterSeat : defaultStarter?.seatId;
       const picker = node("select",{"aria-label":"Starting player",disabled:busy},
         node("option",{value:""},"Choose who starts"),
         ...candidates.map(player=>node("option",{value:player.seatId},

@@ -32,7 +32,7 @@ On staging, open **TEST room** from the tabletop home to try random bot play or 
 
 ### Debug a game
 
-Open **Game log** on the board or a player device, then tap **Copy game log**. Save the copied JSON to a file or paste it into a bug report. It includes accepted and rejected actions, anonymous seat numbers, revisions, and public pile state. TEST rooms include their seed and scenario.
+In a TEST room, open **Game log** on the board or a player device, then tap **Copy game log**. Save the copied JSON to a file or paste it into a bug report. It includes accepted and rejected actions, anonymous seat numbers, revisions, and public pile state. The log includes the seed and scenario.
 
 ```sh
 python3 scripts/check-game-log.py game-log.json
