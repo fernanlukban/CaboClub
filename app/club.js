@@ -1,6 +1,20 @@
 const root = document.querySelector("#club");
 const connection = document.querySelector("#connection");
 const query = new URLSearchParams(location.search);
+const use3d = query.get("scene") === "3d";
+const sceneMotion = matchMedia("(prefers-reduced-motion: reduce)");
+let sceneFailed = false;
+
+function syncScene() {
+  if (!use3d || sceneFailed || !window.wasmBindings?.set_scene_frame) return;
+  const accepted = window.wasmBindings.set_scene_frame(JSON.stringify({
+    snapshot: snapshot ?? null, busy, reducedMotion: sceneMotion.matches,
+    optimistic: pendingMove?.data ?? null,
+  }));
+  if (accepted !== undefined) selection = JSON.parse(accepted);
+  document.body.classList.toggle("bevy-scene", accepted !== undefined && !!snapshot && snapshot.phase !== "lobby");
+}
+
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 function readSession(key) {
   try { return JSON.parse(localStorage.getItem(key) || "null"); }
@@ -28,6 +42,7 @@ let testRoomsEnabled = false;
 let dismissedSwap;
 let busy = false;
 let polling = false;
+let pendingMove;
 let page = query.has("room") ? "join" : "home";
 let notice = "";
 let pairing = "";
@@ -85,12 +100,12 @@ function save(next) {
   else localStorage.removeItem(key);
 }
 function endpoint(suffix = "") { return `/api/rooms/${encodeURIComponent(session.room)}${suffix}`; }
-async function request(url, payload, credentials = session) {
+async function request(url, payload, credentials = session, signal) {
   const headers = {};
   if (payload) headers["Content-Type"] = "application/json";
   if (credentials) headers.Authorization = `Bearer ${credentials.token}`;
   const response = await fetch(url, {
-    method:payload?"POST":"GET", headers, body:payload?JSON.stringify(payload):undefined, cache:"no-store",
+    method:payload?"POST":"GET", headers, body:payload?JSON.stringify(payload):undefined, cache:"no-store", signal,
   });
   const data = await response.json();
   return [response, data];
@@ -144,40 +159,84 @@ async function connect(url, payload) {
   finally { busy = false; render(); }
 }
 async function poll() {
-  if (!session || busy || polling) return;
+  if (!session || (busy && !pendingMove) || polling) return;
   polling = true;
   const active = session;
   try {
     const [response, data] = await request(endpoint(), undefined, active);
-    if (session !== active || busy) return;
+    if (session !== active || (busy && !pendingMove)) return;
     if (response.ok) {
-      connection.hidden = true;
+      connection.hidden = !pendingMove?.checking;
       accept(data);
     } else if ([401,404].includes(response.status)) {
       leave(errors[data.error]);
     }
   } catch {
-    if (session === active) { connection.textContent = "Reconnecting…"; connection.hidden = false; }
+    if (session === active && !pendingMove) { connection.textContent = "Reconnecting…"; connection.hidden = false; }
   } finally { polling = false; }
 }
+async function reconcileMove(move) {
+  let delay = 300;
+  while (session === move.session) {
+    const abort = new AbortController();
+    move.abort = abort;
+    const deadline = setTimeout(() => abort.abort(), 5000);
+    try {
+      const result = await request(move.url, move.data, move.session, abort.signal);
+      const [response, body] = result;
+      if (body?.outcome === "accepted" || body?.outcome === "rejected" ||
+          [401,404].includes(response.status)) return result;
+    } catch {
+      // A timeout or lost response leaves the command outcome unknown.
+    } finally {
+      clearTimeout(deadline);
+    }
+    if (session !== move.session) return;
+    await new Promise(resolve => setTimeout(resolve, delay));
+    delay = Math.min(delay * 2, 3000);
+  }
+}
+
 async function submit(choice, explicitSlots) {
   if (!choice || busy || !snapshot) return;
   const active = session;
   const slots = explicitSlots ?? (choice.max ? selection.slice() : []);
   if (slots.length < choice.min || slots.length > choice.max || slots.includes(undefined)) return;
+  const commandId = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36);
+  let data;
+  if (use3d && !sceneFailed && window.wasmBindings?.build_scene_command) {
+    const command = window.wasmBindings.build_scene_command(choice.action, JSON.stringify(explicitSlots ?? null), commandId, insertLeft);
+    if (!command) return;
+    data = JSON.parse(command);
+  } else {
+    data = {
+      commandId, expectedRevision:snapshot.revision, action:choice.action, slots, insertLeft, dealId:snapshot.dealId,
+      powerId:snapshot.pendingPower?.powerId ?? null,
+      testGeneration:snapshot.test?.generation ?? null,
+    };
+  }
   busy = true;
+  const url = endpoint("/commands");
+  const move = use3d && !sceneFailed && window.wasmBindings?.build_scene_command
+    ? {data, url, session:active, checking:false} : null;
+  if (move) {
+    pendingMove = move;
+    move.checkTimer = setTimeout(() => {
+      if (pendingMove !== move) return;
+      move.checking = true;
+      connection.textContent = "Checking your move…";
+      connection.hidden = false;
+    }, 700);
+  }
   render();
-  const data = {
-    commandId:globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36),
-    expectedRevision:snapshot.revision, action:choice.action, slots, insertLeft, dealId:snapshot.dealId,
-    powerId:snapshot.pendingPower?.powerId ?? null,
-    testGeneration:snapshot.test?.generation ?? null,
-  };
   try {
     let result;
-    try { result = await request(endpoint("/commands"), data, active); }
-    catch { result = await request(endpoint("/commands"), data, active); }
-    if (session !== active) return;
+    if (move) result = await reconcileMove(move);
+    else {
+      try { result = await request(url, data, active); }
+      catch { result = await request(url, data, active); }
+    }
+    if (!result || session !== active) return;
     const [response, body] = result;
     if ([401,404].includes(response.status)) { leave(errors[body.error]); return; }
     if (response.ok) {
@@ -190,12 +249,25 @@ async function submit(choice, explicitSlots) {
       if (choice.action === "skipTurn" && nextRevision) notice = body.detail;
       if (choice.action === "revokeBoard") pairing = "";
       selection = [];
+      if (use3d) window.wasmBindings?.clear_scene_selection?.();
     } else notice = errors[body.detail] || "That action could not be applied.";
     if (body.snapshot) accept(body.snapshot, false, false);
   } catch { notice = "Connection lost. Check the table before trying again."; }
-  finally { busy = false; render(); }
+  finally {
+    if (move) clearTimeout(move.checkTimer);
+    if (pendingMove === move && move) {
+      pendingMove = undefined;
+      connection.hidden = true;
+    }
+    if (session === active) { busy = false; render(); }
+  }
 }
 function leave(message = "") {
+  pendingMove?.abort?.abort();
+  if (pendingMove) clearTimeout(pendingMove.checkTimer);
+  pendingMove = undefined;
+  busy = false;
+  connection.hidden = true;
   save(null); snapshot = undefined; selection = []; starterSeat = undefined; pairing = ""; tableControlsOpen = false; notice = message;
   page = "home";
   const url = new URL(location.href);
@@ -345,6 +417,10 @@ function status() {
   return snapshot.message;
 }
 function toggle(slot) {
+  if (document.body.classList.contains("bevy-scene")) {
+    if (window.wasmBindings.toggle_scene_selection(slot)) render();
+    return;
+  }
   if (selection.includes(slot)) selection = selection.filter(id=>id!==slot);
   else {
     const limit = Math.max(...snapshot.availableActions.filter(action=>action.slots.includes(slot)&&action.action!=="spy").map(action=>action.max),1);
@@ -496,6 +572,7 @@ function lobbyOrBoard() {
   const joinUrl = new URL("/",location.origin);
   joinUrl.searchParams.set("play", "");
   joinUrl.searchParams.set("room",snapshot.roomCode);
+  if (use3d) joinUrl.searchParams.set("scene","3d");
   const invite = lobby?node("div",{class:"invite"},
     node("img",{src:`/api/qr?url=${encodeURIComponent(joinUrl.href)}`,alt:"Scan to join the Cabo table"}),
     node("span",{class:"room-code"},snapshot.roomCode),mode==="player"?node("a",{href:joinUrl.href,target:"_blank",rel:"noopener"},"Open player join link"):null):null;
@@ -521,7 +598,10 @@ function lobbyOrBoard() {
 function phone() {
   const active = snapshot.phase==="playing"&&snapshot.turnSeatId===snapshot.youSeatId;
   const me = snapshot.players.find(p=>p.seatId===snapshot.youSeatId);
-  const hand = [...me.cards, ...(active && snapshot.incoming ? [snapshot.incoming] : [])];
+  const closingLook = pendingMove?.data.action === "confirmInitialLook" &&
+    pendingMove.data.dealId === snapshot.dealId && snapshot.phase === "initialPreview";
+  const hand = [...me.cards.map(card => closingLook ? {...card, rank:null} : card),
+    ...(active && snapshot.incoming ? [snapshot.incoming] : [])];
   const selectableSlots = selectable();
   const rows = hand.length>8?Math.ceil(hand.length/8):1;
   const cols = Math.max(1,Math.ceil(hand.length/rows));
@@ -531,7 +611,7 @@ function phone() {
     "swapSelectingOpponent","swapReview"].includes(snapshot.pendingPower?.phase);
   const privateResult = powerToast();
   const opening = snapshot.availableActions.some(action=>action.action==="revealInitialCards");
-  const prompt = opening?`Choose two cards · ${selection.length} of 2`:snapshot.availableActions.some(action=>action.action==="confirmInitialLook")?"Remember these two cards":powerPrompt() || status();
+  const prompt = closingLook ? "Ready" : opening?`Choose two cards · ${selection.length} of 2`:snapshot.availableActions.some(action=>action.action==="confirmInitialLook")?"Remember these two cards":powerPrompt() || status();
   const playingActions = new Set(["pairBoard","revokeBoard","skipTurn"]);
   const tableActions = snapshot.availableActions.some(choice=>playingActions.has(choice.action));
   const flip = snapshot.matchFlip;
@@ -587,14 +667,16 @@ function animateMove(stage, previousCards, previousPiles, move) {
 }
 let surface;
 function render() {
+  syncScene();
   const usePhone = snapshot?.role==="player"&&["initialPreview","readyToStart","playing"].includes(snapshot.phase);
   if (usePhone && surface==="phone") {
     const previous = root.firstElementChild;
     const next = phone();
     const previousStage = previous.querySelector(".stage");
     const nextStage = next.querySelector(".stage");
-    const previousCards = new Map([...previousStage.querySelectorAll(".hand .card")].map(card=>[card.dataset.sprite,card.getBoundingClientRect()]));
-    const previousPiles = [...previousStage.querySelectorAll(".pile .card")].map(card=>card.getBoundingClientRect());
+    const domMotion = !document.body.classList.contains("bevy-scene") && moveAnimation;
+    const previousCards = domMotion ? new Map([...previousStage.querySelectorAll(".hand .card")].map(card=>[card.dataset.sprite,card.getBoundingClientRect()])) : null;
+    const previousPiles = domMotion ? [...previousStage.querySelectorAll(".pile .card")].map(card=>card.getBoundingClientRect()) : null;
     previous.className = next.className;
     previousStage.querySelector(".piles").replaceChildren(...nextStage.querySelector(".piles").children);
     const previousHand = previousStage.querySelector(".hand");
@@ -611,9 +693,9 @@ function render() {
     previous.querySelector("header").replaceWith(next.querySelector("header"));
     previous.querySelector(".table-controls")?.remove();
     if (next.querySelector(".table-controls")) previous.append(next.querySelector(".table-controls"));
-    animateMove(previousStage, previousCards, previousPiles, moveAnimation);
+    if (domMotion) animateMove(previousStage, previousCards, previousPiles, moveAnimation);
   } else {
-    const previousCards = animateTabletopSwap && !matchMedia("(prefers-reduced-motion: reduce)").matches
+    const previousCards = !document.body.classList.contains("bevy-scene") && animateTabletopSwap && !matchMedia("(prefers-reduced-motion: reduce)").matches
       ? new Map([...root.querySelectorAll(".tabletop-hand .card")].map(card=>[card.dataset.sprite,card.getBoundingClientRect()]))
       : null;
     root.replaceChildren(snapshot?(usePhone?phone():node("div",{},top(),lobbyOrBoard())):home());
@@ -634,6 +716,38 @@ function render() {
   animateTabletopSwap = false;
   moveAnimation = undefined;
   animateMatchFlip = false;
+}
+if (use3d) {
+  window.addEventListener("TrunkApplicationStarted", syncScene);
+  document.querySelector("#table").addEventListener("webglcontextlost", () => {
+    sceneFailed = true;
+    document.body.classList.remove("bevy-scene");
+    render();
+  });
+  sceneMotion.addEventListener("change", syncScene);
+  window.addEventListener("cabo-scene-pick", event => {
+    if (busy || !document.body.classList.contains("bevy-scene")) return;
+    const key = event.detail;
+    if (key === "selection") { render(); return; }
+    const [action, slot] = key === "deck" ? ["drawDeck"] :
+      key === "discard" ? ["drawDiscard"] : key.split(":");
+    const choice = snapshot.availableActions.find(choice => choice.action === action);
+    if (choice) submit(choice, slot === undefined ? undefined : [Number(slot)]);
+  });
+  let pointerStart;
+  window.addEventListener("pointerdown", event => {
+    pointerStart = undefined;
+    if (!document.body.classList.contains("bevy-scene") || !event.isPrimary || event.button!==0 ||
+        event.target.closest("button, input, select, a, dialog")) return;
+    pointerStart = { id:event.pointerId, x:event.clientX, y:event.clientY, revision:snapshot?.revision };
+  });
+  window.addEventListener("pointerup", event => {
+    const start = pointerStart;
+    pointerStart = undefined;
+    if (!start || start.id!==event.pointerId || start.revision!==snapshot?.revision) return;
+    window.wasmBindings.pick_scene_card(start.x, start.y);
+  });
+  window.addEventListener("pointercancel", () => { pointerStart = undefined; });
 }
 render();
 poll();

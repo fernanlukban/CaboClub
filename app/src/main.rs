@@ -1,20 +1,25 @@
 use bevy::prelude::*;
 
+mod scene3d;
+
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Cabo Club".into(),
-                canvas: Some("#table".into()),
-                fit_canvas_to_parent: true,
-                ..default()
-            }),
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "Cabo Club".into(),
+            canvas: Some("#table".into()),
+            fit_canvas_to_parent: true,
             ..default()
-        }))
-        .insert_resource(ClearColor(Color::NONE))
-        .add_systems(Startup, setup)
-        .add_plugins(card_scene)
-        .run();
+        }),
+        ..default()
+    }))
+    .insert_resource(ClearColor(Color::NONE));
+    if scene3d::enabled() {
+        app.add_plugins(scene3d::plugin);
+    } else {
+        app.add_systems(Startup, setup).add_plugins(card_scene);
+    }
+    app.run();
 }
 
 fn setup(mut commands: Commands) {
