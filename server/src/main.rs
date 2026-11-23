@@ -19,7 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{net::TcpListener, sync::Mutex};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 type Rooms = Arc<Mutex<HashMap<String, Room>>>;
 
@@ -226,7 +226,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
         ))
         .with_state(Rooms::default());
+    let app_shell = std::path::Path::new(&app_dir).join("index.html");
     let app = Router::new()
+        .route_service("/tabletop", ServeFile::new(&app_shell))
+        .route_service("/tabletop/", ServeFile::new(&app_shell))
         .route("/health", get(|| async { "ok" }))
         .nest("/api", api)
         .fallback_service(ServeDir::new(app_dir));

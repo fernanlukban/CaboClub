@@ -129,7 +129,7 @@ Tabletop mode is an optional way to play the same room. An iPad lying flat shows
 
 ### Open tabletop mode on the iPad
 
-The tabletop home screen offers **Join a game** and **Create a new game**.
+The dedicated `/tabletop` route stays in board mode across refreshes and reconnects. The tabletop home screen offers **Join a game** and **Create a new game**.
 
 - **Join a game.** Resume an existing board session if available. Otherwise enter a short-lived board pairing code from the host. Load the latest complete board snapshot and open directly into the room's current phase, including a game already in progress.
 - **Create a new game.** Create the lobby and its board session together. Immediately show a QR code containing the player join URL and a text room code for manual entry. Phones scanning the QR open the Bevy web app at the room's join screen. After choosing a name, each phone receives its own private seat credential and opens the landscape hand view. Keep board and seat credentials out of the QR.

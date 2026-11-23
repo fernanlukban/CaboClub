@@ -8,10 +8,14 @@ function readSession(key) {
 }
 const room = query.get("room")?.toUpperCase();
 const previousBoard = isIPad && room && readSession("cabo-session-board")?.room === room;
-const mode = query.has("board") || (isIPad && !query.has("play") && (!room || previousBoard)) ? "board" : "player";
-if (mode === "board" && !query.has("board")) {
+const tabletopPath = "/tabletop";
+const onTabletopPath = [tabletopPath, tabletopPath + "/"].includes(location.pathname);
+const mode = onTabletopPath || query.has("board") || (isIPad && !query.has("play") && (!room || previousBoard)) ? "board" : "player";
+if (mode === "board" && (location.pathname !== tabletopPath || query.has("board") || query.has("play"))) {
   const url = new URL(location.href);
-  url.searchParams.set("board", "");
+  url.pathname = tabletopPath;
+  url.searchParams.delete("board");
+  url.searchParams.delete("play");
   history.replaceState(null, "", url);
 }
 const key = `cabo-session-${mode}`;
@@ -178,7 +182,7 @@ function home() {
   if (page === "home") {
     return node("section",{class:"home"},brand,node("p",{},mode === "board"?"The shared table":"Private tables for two to four players"),
       node("div",{class:"home-nav"},button("Join a game",()=>navigate("join")),button("Create a new game",()=>mode==="board"?connect("/api/rooms",{board:true}):navigate("create"),true)),
-      mode==="player"?node("a",{href:"?board"},"Open tabletop mode"):null,notice?node("p",{role:"status"},notice):null);
+      mode==="player"?node("a",{href:tabletopPath},"Open tabletop mode"):null,notice?node("p",{role:"status"},notice):null);
   }
   const creating = page === "create";
   const form = node("form",{submit:event=>{
@@ -295,7 +299,7 @@ function lobbyOrBoard() {
   const results = snapshot.phase==="roundResults" || finished;
   const heading = lobby?"Your table":finished?"Game over":results?"Round results":
     snapshot.phase==="readyToStart"?"Ready to play":snapshot.phase==="initialPreview"?"Opening look":status();
-  const joinUrl = new URL(location.pathname,location.origin);
+  const joinUrl = new URL("/",location.origin);
   joinUrl.searchParams.set("play", "");
   joinUrl.searchParams.set("room",snapshot.roomCode);
   const invite = lobby?node("div",{class:"invite"},

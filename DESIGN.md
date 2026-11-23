@@ -12,7 +12,7 @@ Use color, shape, and text together. A selected card lifts, gains an outline, an
 
 ## iPad tabletop
 
-The tabletop home has two entry points:
+The `/tabletop` route opens the board on any device. The tabletop home has two entry points:
 
 | Entry | What appears |
 | --- | --- |
