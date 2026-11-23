@@ -55,7 +55,7 @@ The client and server ship together. All power resolution goes through the state
 
 ## TEST room
 
-Put a **TEST room** entry on staging tabletop home. A board session creates a fresh private test room and shows a QR invite for one human phone. Fill the other three seats with labeled bots. The board still deals and starts, and all regular rooms keep their normal join flow.
+Put a **TEST room** entry on staging tabletop home. A board session creates a fresh private test room and shows a QR invite for one human phone. Fill the other three seats with labeled bots. The board still deals and starts. Once everyone is ready, the starter picker defaults to the human player. Random play also lets the board choose a bot. Game log appears on the board and phone in TEST rooms.
 
 | Setup option | Behavior |
 | --- | --- |

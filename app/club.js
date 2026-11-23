@@ -52,7 +52,7 @@ const errors = {
   invalidName:"Enter a name with 1 to 22 characters.",roomUnavailable:"This room is full or already playing.",
   invalidPairing:"That board pairing code has expired or is incorrect.",roomNotFound:"This room has expired or does not exist.",
   invalidSession:"Your session ended. Join again to continue.",actionUnavailable:"That move is unavailable now.",
-  seatTaken:"That direction is taken. Choose another seat.",
+  seatTaken:"That seat is taken. Choose another seat.",
   staleTest:"This test was already restarted.",
   stalePower:"That power has changed. Check the current selection.",
   invalidSeed:"Enter a whole-number seed between 0 and 18446744073709551615.",
@@ -236,9 +236,9 @@ function home() {
     else connect(`/api/rooms/${encodeURIComponent(room)}/join`,{name:data.get("name"),direction});
   }},creating?null:field("Room code","room",query.get("room") || "",8),
     mode==="board"?field("Board pairing code","code","",10):field("Your name","name"),
-    mode==="player"?node("label",{},"Seat direction",node("select",{name:"direction"},
+    mode==="player"?node("label",{},"Seat",node("select",{name:"direction"},
       node("option",{value:""},"Any open seat"),
-      ...directions.map(direction=>node("option",{value:direction},directionLabel(direction))))):null,
+      ...directions.map(direction=>node("option",{value:direction},seatLabel(direction))))):null,
     node("button",{type:"submit",class:"primary",disabled:busy},creating?"Create room":"Join room"));
   return node("section",{class:"home"},brand,node("h2",{},creating?"Create a game":"Join a game"),form,
     notice?node("p",{role:"status"},notice):null,button("Back",()=>navigate("home")));
@@ -292,7 +292,7 @@ async function openGameLog() {
 function top(showTableControls = false) {
   return node("header",{class:"top"},node("span",{class:"brand"},"Cabo Club"),
     node("span",{},`${snapshot.roomCode} · ${snapshot.round ? "Round " + snapshot.round : "Lobby"}`),
-    node("div",{class:"top-controls"},button("Game log",openGameLog),showTableControls?button("Table",()=>{tableControlsOpen=!tableControlsOpen;render();}):null,button("Leave",()=>leave())));
+    node("div",{class:"top-controls"},snapshot.test?button("Game log",openGameLog):null,showTableControls?button("Table",()=>{tableControlsOpen=!tableControlsOpen;render();}):null,button("Leave",()=>leave())));
 }
 function card(view, index = 0, action, selected = false, name, lookedAt = false) {
   const rank = view?.rank;
@@ -357,11 +357,13 @@ function actionStrip(filter = () => true) {
     if (choice.action==="beginPlay" && choice.max) {
       const candidates = directions.flatMap(direction=>snapshot.players.filter(player=>
         player.direction===direction && choice.slots.includes(player.seatId)));
-      const selected = candidates.length===1 ? candidates[0].seatId : starterSeat;
+      const defaultStarter = candidates.length===1 ? candidates[0] :
+        snapshot.test ? candidates.find(player=>!player.bot) : undefined;
+      const selected = choice.slots.includes(starterSeat) ? starterSeat : defaultStarter?.seatId;
       const picker = node("select",{"aria-label":"Starting player",disabled:busy},
         node("option",{value:""},"Choose who starts"),
         ...candidates.map(player=>node("option",{value:player.seatId},
-          `${directionLabel(player.direction)} · ${player.name}`)));
+          `${seatLabel(player.direction)} · ${player.name}`)));
       picker.value = selected ?? "";
       picker.addEventListener("change",()=>{
         starterSeat = Number(picker.value) || undefined;
@@ -397,8 +399,8 @@ function summary(showCards = false) {
       showCards?node("div",{class:"result-cards"},...p.cards.map((item,index)=>card(item,index))):null);
   }));
 }
-const directions = ["north", "west", "south", "east"];
-const directionLabel = direction=>direction[0].toUpperCase()+direction.slice(1);
+const directions = ["north", "east", "south", "west"];
+const seatLabel = direction=>`Seat ${directions.indexOf(direction)+1}`;
 
 function powerPrompt() {
   const pending = snapshot.pendingPower;
@@ -444,6 +446,7 @@ function tabletop(center, miniature = false) {
   const ownChoice = miniature && snapshot.availableActions.find(choice=>choice.action==="selectPowerOwnCard");
   const activePlayer = snapshot.players.find(player=>player.seatId===snapshot.turnSeatId);
   return node("div",{class:`tabletop ${miniature?"mini-tabletop":""}`},...directions.map(direction=>{
+    const label = seatLabel(direction);
     const player = snapshot.players.find(seat=>seat.direction===direction);
     const current = player && player.seatId===snapshot.turnSeatId;
     const hand = current && snapshot.incoming ? [...player.cards, snapshot.incoming] : player?.cards;
@@ -453,7 +456,7 @@ function tabletop(center, miniature = false) {
       snapshot.phase==="readyToStart" ? "Ready to start" :
       snapshot.phase==="roundResults" ? "Round results" :
       snapshot.phase==="gameOver" ? "Game over" : "Lobby");
-    return node("section",{class:`tabletop-seat ${direction} ${current?"current":""}`,"aria-label":`${direction} seat`},
+    return node("section",{class:`tabletop-seat ${direction} ${current?"current":""}`,"aria-label":label},
       node("div",{class:"tabletop-seat-content"},
         hand?.length?node("div",{class:"tabletop-hand",style:`--cards:${hand.length}`},
           ...hand.map((item,index)=>{
@@ -465,7 +468,7 @@ function tabletop(center, miniature = false) {
             const label = `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}${lookedAt?", looked at during opening":""}`;
             return card(item,index,pick,selected,label,lookedAt);
           })):null,
-        node("strong",{},player?.name ?? (miniature ? directionLabel(direction) : `${directionLabel(direction)} · Open seat`)),
+        node("strong",{},miniature ? (player?.name ?? label) : `${label} · ${player?.name ?? "Open"}`),
         player&&!miniature?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null));
   }),node("div",{class:"tabletop-center"},center));
 }

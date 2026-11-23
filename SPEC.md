@@ -12,7 +12,7 @@ Two to four players can open a browser, create a private table or join via an in
 
 ## Game lifecycle
 
-1. Create a room with a shareable code. Each player can pick North, West, South, East, or any open seat from the join screen. Reject an occupied direction and keep the assigned direction with the private seat credential.
+1. Create a room with a shareable code. Players can pick Seat 1, 2, 3, 4, or any open seat from the join screen. The iPad uses the same numbers for open and occupied seats and in the starting-player picker. The numbers map clockwise to North, East, South, and West. The API and private seat credential continue to use directions. Reject requests for occupied seats.
 2. Deal four hidden cards per player with at least two players present. Each player privately chooses two of their four cards to look at and confirms before the board begins play. Show the discard pile's top card and the number of cards left in the deck.
 3. On a player's turn, allow a legal draw, discard, exchange, special ability, or Cabo call. Apply exchanges and their penalties atomically. Deck cards 7–8 allow Peek, 9–10 allow Spy, and 11–12 allow Swap. A Cabo call grants every other player one final turn. Deck exhaustion ends the round.
 4. Reveal hands at round end. A caller tied for the lowest hand scores zero. Otherwise the caller adds ten to their hand total. A hand of 12, 12, 13, 13 scores zero and awards each opponent 50. Exactly 100 resets a player's total to 50 once per game. A total above 100 ends the game and the lowest total wins, with last-round points breaking ties where possible.
