@@ -2,11 +2,21 @@ const root = document.querySelector("#club");
 const connection = document.querySelector("#connection");
 const query = new URLSearchParams(location.search);
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-const mode = query.has("board") || (isIPad && !query.has("room") && !query.has("play")) ? "board" : "player";
+function readSession(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "null"); }
+  catch { return null; }
+}
+const room = query.get("room")?.toUpperCase();
+const previousBoard = isIPad && room && readSession("cabo-session-board")?.room === room;
+const mode = query.has("board") || (isIPad && !query.has("play") && (!room || previousBoard)) ? "board" : "player";
+if (mode === "board" && !query.has("board")) {
+  const url = new URL(location.href);
+  url.searchParams.set("board", "");
+  history.replaceState(null, "", url);
+}
 const key = `cabo-session-${mode}`;
-let session;
-try { session = JSON.parse(localStorage.getItem(key) || "null"); } catch { session = null; }
-if (query.get("room") && session?.room !== query.get("room").toUpperCase()) session = null;
+let session = readSession(key);
+if (room && session?.room !== room) session = null;
 let snapshot;
 let selection = [];
 let target;
@@ -71,6 +81,10 @@ async function request(url, payload, credentials = session) {
 }
 function accept(next, force = false, renderNow = true) {
   if (!session || next.roomCode !== session.room) return;
+  if (next.role !== mode) {
+    leave("That session belongs to a different device mode. Join again to continue.");
+    return;
+  }
   if (!force && snapshot && next.roomId === snapshot.roomId && next.revision <= snapshot.revision) return;
   if (snapshot && snapshot.dealId !== next.dealId) { selection = []; target = undefined; }
   const currentTargets = new Set(next.availableActions.flatMap(action => action.targets));
@@ -89,6 +103,7 @@ async function connect(url, payload) {
   try {
     const [response, data] = await request(url, payload, null);
     if (!response.ok) { notice = errors[data.error] || "Could not join the table."; return; }
+    if (data.snapshot.role !== mode) { notice = "Could not join in this device mode."; return; }
     save({ room:data.snapshot.roomCode, token:data.token });
     snapshot = undefined;
     const pageUrl = new URL(location.href);
@@ -163,7 +178,7 @@ function home() {
   if (page === "home") {
     return node("section",{class:"home"},brand,node("p",{},mode === "board"?"The shared table":"Private tables for two to four players"),
       node("div",{class:"home-nav"},button("Join a game",()=>navigate("join")),button("Create a new game",()=>mode==="board"?connect("/api/rooms",{board:true}):navigate("create"),true)),
-      node("a",{href:mode === "board"?"?play":"?board"},mode==="board"?"Play on this device":"Open tabletop mode"),notice?node("p",{role:"status"},notice):null);
+      mode==="player"?node("a",{href:"?board"},"Open tabletop mode"):null,notice?node("p",{role:"status"},notice):null);
   }
   const creating = page === "create";
   const form = node("form",{submit:event=>{
@@ -187,10 +202,11 @@ function top(showTableControls = false) {
 function card(view, index = 0, action, selected = false, name) {
   const rank = view?.rank;
   const face = rank !== null && rank !== undefined;
-  return node("button",{
-    type:"button",class:`card ${face?"face":""} ${selected?"selected":""} ${view?"":"empty"}`,
+  const props = mode==="board" ? { role:"img" } :
+    { type:"button", "aria-pressed":String(selected), disabled:!action || busy, click:action ?? (()=>{}) };
+  return node(mode==="board"?"div":"button",{
+    ...props,class:`card ${face?"face":""} ${selected?"selected":""} ${view?"":"empty"}`,
     "aria-label": name || `Card ${index+1}${face?", rank "+rank:", face down"}`,
-    "aria-pressed":String(selected),disabled:!action || busy,click:action ?? (()=>{}),
     style:`--index:${index}`,
     "data-sprite":view?.slot === undefined ? (name ?? `card-${index}`) : String(view.slot),
   },node("span",{class:"card-inner"},view?(face?String(rank):"✦"):"—"));
@@ -198,7 +214,7 @@ function card(view, index = 0, action, selected = false, name) {
 function piles(interactive = false) {
   const draw = snapshot.availableActions.find(x=>x.action==="drawDeck");
   const discard = snapshot.availableActions.find(x=>x.action==="drawDiscard");
-  const deckCard = card(snapshot.deckCount?{rank:null}:null,0,interactive&&draw?()=>submit(draw):null,false,"Draw from deck");
+  const deckCard = card(snapshot.deckCount?{rank:null}:null,0,interactive&&draw?()=>submit(draw):null,false,mode==="board"?"Face-down deck":"Draw from deck");
   if (interactive && draw) {
     let start;
     deckCard.addEventListener("pointerdown", event => { start = [event.clientX,event.clientY]; deckCard.setPointerCapture(event.pointerId); });
@@ -211,7 +227,7 @@ function piles(interactive = false) {
   return node("div",{class:"piles"},
     node("div",{class:"pile"},deckCard,`Deck · ${snapshot.deckCount}`),
     node("div",{class:"pile"},card(snapshot.discardTop===null?null:{rank:snapshot.discardTop},0,
-      interactive&&discard?()=>submit(discard):null,false,`Take discard${snapshot.discardTop===null?"":", rank "+snapshot.discardTop}`),"Discard"));
+      interactive&&discard?()=>submit(discard):null,false,`${mode==="board"?"Discard pile":"Take discard"}${snapshot.discardTop===null?"":", rank "+snapshot.discardTop}`),"Discard"));
 }
 function status() {
   const turn = snapshot.players.find(p=>p.seatId===snapshot.turnSeatId);
@@ -251,6 +267,28 @@ function summary(showCards = false) {
       showCards?node("div",{class:"result-cards"},...p.cards.map((item,index)=>card(item,index))):null);
   }));
 }
+const directions = ["south", "north", "west", "east"];
+
+function tabletop(center) {
+  return node("div",{class:"tabletop"},...directions.map((direction,index)=>{
+    const player = snapshot.players[index];
+    const ready = ["initialPreview","readyToStart"].includes(snapshot.phase);
+    const current = player && player.seatId===snapshot.turnSeatId;
+    const result = snapshot.results.find(item=>item.seatId===player?.seatId);
+    const description = player ? [
+      `${player.score} points`,
+      ready?(player.ready?"Ready":"Looking"):null,
+      current?"Current turn":null,
+      result?`+${result.points} this round`:null,
+    ].filter(Boolean).join(" · ") : null;
+    return node("section",{class:`tabletop-seat ${direction} ${current?"current":""}`,"aria-label":`${direction} seat`},
+      node("strong",{},player?.name ?? "Open seat"),
+      description?node("small",{},description):null,
+      player?.cards.length?node("div",{class:"tabletop-hand"},
+        ...player.cards.map((item,index)=>card(item,index))):null);
+  }),node("div",{class:"tabletop-center"},center));
+}
+
 function lobbyOrBoard() {
   const lobby = snapshot.phase==="lobby";
   const finished = snapshot.phase==="gameOver";
@@ -258,11 +296,20 @@ function lobbyOrBoard() {
   const heading = lobby?"Your table":finished?"Game over":results?"Round results":
     snapshot.phase==="readyToStart"?"Ready to play":snapshot.phase==="initialPreview"?"Opening look":status();
   const joinUrl = new URL(location.pathname,location.origin);
+  joinUrl.searchParams.set("play", "");
   joinUrl.searchParams.set("room",snapshot.roomCode);
   const invite = lobby?node("div",{class:"invite"},
     node("img",{src:`/api/qr?url=${encodeURIComponent(joinUrl.href)}`,alt:"Scan to join the Cabo table"}),
-    node("span",{class:"room-code"},snapshot.roomCode),node("a",{href:joinUrl.href,target:"_blank",rel:"noopener"},"Open player join link")):null;
+    node("span",{class:"room-code"},snapshot.roomCode),mode==="player"?node("a",{href:joinUrl.href,target:"_blank",rel:"noopener"},"Open player join link"):null):null;
   const winner = finished?snapshot.players.filter(p=>snapshot.winners.includes(p.seatId)).map(p=>p.name).join(" and "):"";
+  if (mode==="board") {
+    return node("section",{class:"board tabletop-view"},node("h2",{},heading),
+      tabletop(lobby?invite:piles()),
+      winner?node("p",{},`Winner: ${winner}`):null,
+      snapshot.caboCaller?node("p",{},`Cabo · ${snapshot.finalTurns.length} final turns remaining`):null,
+      snapshot.availableActions.length?actionStrip():null,
+      notice?node("p",{role:"status"},notice):null);
+  }
   return node("section",{class:lobby?"lobby":"board"},node("h2",{},heading),invite,
     summary(results),winner?node("p",{},`Winner: ${winner}`):null,
     !lobby&&!results?piles():null,

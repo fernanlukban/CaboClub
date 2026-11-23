@@ -2,7 +2,7 @@
 
 ## Goal
 
-Two to four players can open a browser, create a private table or join via an invite, and play a full Cabo game. The host or a room-creating board deals rounds. A paired board or the host begins play once every player confirms their opening look. Players keep their seat when reconnecting with a valid session.
+Two to four players can open a browser, create a private table or join via an invite, and play a full Cabo game. The host or a room-creating board deals rounds. The iPad board begins play once every player confirms their opening look. Players keep their seat when reconnecting with a valid session.
 
 ## Ownership
 
@@ -13,7 +13,7 @@ Two to four players can open a browser, create a private table or join via an in
 ## Game lifecycle
 
 1. Create a room, return a shareable code and a separate private seat credential, then allow up to four seats while the lobby is open.
-2. Deal four hidden cards per player with at least two players present. Each player privately chooses two of their four cards to look at and confirms before the board or host begins play. Show the discard pile's top card and the number of cards left in the deck.
+2. Deal four hidden cards per player with at least two players present. Each player privately chooses two of their four cards to look at and confirms before the board begins play. Show the discard pile's top card and the number of cards left in the deck.
 3. On a player's turn, allow a legal draw, discard, exchange, special ability, or Cabo call. Apply exchanges and their penalties atomically. Deck cards 7–8 allow Peek, 9–10 allow Spy, and 11–12 allow Swap. A Cabo call grants every other player one final turn. Deck exhaustion ends the round.
 4. Reveal hands at round end. A caller tied for the lowest hand scores zero. Otherwise the caller adds ten to their hand total. A hand of 12, 12, 13, 13 scores zero and awards each opponent 50. Exactly 100 resets a player's total to 50 once per game. A total above 100 ends the game and the lowest total wins, with last-round points breaking ties where possible.
 5. The host or room-creating board deals the next round or a new game after completion. Preserve the deployed app's detailed match, penalty, turn order, and scoring behavior in regression cases during the port.
@@ -27,10 +27,10 @@ Dealing and starting play happen in two separate steps. Use the same flow for th
 | `lobby`, `roundResults`, or `gameOver` | The host or room-creating board selects **Deal cards**, **Deal next round**, or **New game**, respectively. Require two to four seats. | Freeze the round roster, deal once, reset readiness, and enter `initialPreview`. There is no active turn yet. |
 | `initialPreview` | A seated player chooses two distinct slots from their own four starting cards and taps **Reveal 2**. | Record the selected pair for this deal and reveal those two values in the seat's private snapshot. A reconnect before confirmation restores the same pair. Further reveal requests cannot change it. |
 | `initialPreview` | The same player selects **I've looked** after revealing. | Record readiness and hide that seat's opening preview values. Remove the two ranks from subsequent seat snapshots, replay responses, and remembered-card UI. A later game-authorized reveal or public scoring can show them again. When every seat has confirmed, enter `readyToStart`. |
-| `readyToStart` | The paired board or host selects **Start game** for round one or **Start round** for later rounds. | Enter `playing` and set the first turn in the same mutation. |
+| `readyToStart` | The paired board selects **Start game** for round one or **Start round** for later rounds. | Enter `playing` and set the first turn in the same mutation. |
 | `playing` | A legal move ends the round under the Cabo or deck exhaustion rules. | Score once and enter `roundResults` or `gameOver`. |
 
-The board displays readiness by seat. It shows its start button only when the server includes `beginPlay` in the board action list. The host phone retains the same start action so a missing or disconnected board cannot block play. The board never sees the opening card values or generates player confirmations. **I've looked** is an explicit player acknowledgment. The server can verify that a reveal occurred, and the player confirms that they saw it.
+The board displays readiness by seat. It shows its start button only when the server includes `beginPlay` in the board action list. If the board disconnects before starting, reconnect it or pair another board. The board never sees the opening card values or generates player confirmations. **I've looked** is an explicit player acknowledgment. The server can verify that a reveal occurred, and the player confirms that they saw it.
 
 Keep the frozen roster and each seat's preview status in server state. Connection changes neither confirm a seat nor remove it from readiness. If a seat cannot return during the first-round preview, the host can cancel setup and return to the lobby. After a later deal, cancel back to the last results without changing completed scores. Discard the abandoned deal and readiness in both cases. In the first playable version, a confirmed seat remains ready until that setup is canceled or play begins.
 
@@ -92,7 +92,7 @@ Use stable, tagged action kinds and typed parameters. Each descriptor carries an
 | `cancelSetup` | Host only, in setup. Identifies the current deal. |
 | `revealInitialCards` | Current deal, with exactly two distinct slot references from the server-provided list of the requesting seat's four starting slots. |
 | `confirmInitialLook` | Current deal. The requesting seat must already have revealed a pair. |
-| `beginPlay` | Current deal. Available to the paired board and host only after all seats confirm. |
+| `beginPlay` | Current deal. Available only to the board after all seats confirm. |
 | `drawDeck`, `drawDiscard` | No parameters. Each appears when the corresponding pile can be taken. |
 | `discardDrawn`, `useDrawnPower`, `callCabo` | No parameters. For a power, include the power kind visible to the acting player. |
 | `discardHandCard` | One selectable existing hand slot to trade for the current incoming card. |
@@ -133,7 +133,7 @@ The tabletop home screen offers **Join a game** and **Create a new game**.
 
 - **Join a game.** Resume an existing board session if available. Otherwise enter a short-lived board pairing code from the host. Load the latest complete board snapshot and open directly into the room's current phase, including a game already in progress.
 - **Create a new game.** Create the lobby and its board session together. Immediately show a QR code containing the player join URL and a text room code for manual entry. Phones scanning the QR open the Bevy web app at the room's join screen. After choosing a name, each phone receives its own private seat credential and opens the landscape hand view. Keep board and seat credentials out of the QR.
-- **Deal and start.** A board that created the room can deal, then show readiness and offer **Start game** once every player confirms. The first phone to join becomes the player host and provides the fallback setup controls if the board disconnects. A board that joins an existing room can start a ready deal. That room's host retains deal and cancel controls.
+- **Deal and start.** A board that created the room can deal, then show readiness and offer **Start game** once every player confirms. The first phone to join becomes the player host and can issue pairing codes and cancel a deal. A board that joins an existing room can start a ready deal. That room's host retains deal and cancel controls.
 
 The board uses no player seat. Pairing and reconnecting preserve the roster and turn order. If the iPad disconnects, phones can continue. If the board credential expires or is revoked, clear the displayed room and return to tabletop home.
 
@@ -141,7 +141,7 @@ The board uses no player seat. Pairing and reconnecting preserve the roster and 
 
 | Device | View and controls |
 | --- | --- |
-| iPad board | Show a large deck with its remaining count, the face-up discard, player names and seat positions, current turn, Cabo final turns, scores, and public round or game results. Make the current player readable from around the table. Show readiness during setup, the start button when offered by the server, and a reconnecting indicator if refresh fails. |
+| iPad board | Show four fixed cardinal seat positions for public card states, a central deck with its remaining count, the face-up discard next to it, current turn, Cabo final turns, scores, and public round or game results. Make the current player readable from around the table. Show readiness during setup, the start button when offered by the server, and a reconnecting indicator if refresh fails. |
 | Player phone | Show the player's four starting slots in a landscape row. Render the actual hand size as exchanges and penalties change it. Show card faces only when the seat snapshot allows them, including private draws, Peek, or Spy. Render the server's available actions and selectable targets, and show enough public context to finish a turn without the iPad. |
 | Host phone | Inherits the player view and provides board pairing and revocation in addition to phase-appropriate host controls. |
 
@@ -165,7 +165,7 @@ Use ease-in-out interpolation for camera zoom, camera translation, and card move
 
 Use the same room and revision stream for both roles. Project a complete public board snapshot from the authoritative state on the server. The shared JSON envelope identifies the board role and has null values for seat-specific fields. The board receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes public board reads and `beginPlay` for a ready deal. Authorize deal commands only for the board session that created the room. Bind every board command to the current room, phase, and session. Require a player session for every other game command. Board command responses use the public projection.
 
-Phones still receive their normal complete seat snapshots. Landscape layout is a presentation choice. Any Bevy or native client can render the board or a player hand from the relevant role's snapshot.
+Keep the board route explicit when persisting the room URL and use distinct board and player sessions. The board projects card backs until ranks are public and uses the same seat position throughout the game. Phones still receive their normal complete seat snapshots. Landscape layout is a presentation choice. Any Bevy or native client can render the board or a player hand from the relevant role's snapshot.
 
 ### Acceptance
 

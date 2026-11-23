@@ -198,7 +198,7 @@ impl Room {
                 choices.push(Choice::button(CancelSetup));
             }
             if round.opening.phase() == SetupPhase::ReadyToStart
-                && (host || matches!(role, Role::Board | Role::CreatorBoard))
+                && matches!(role, Role::Board | Role::CreatorBoard)
             {
                 choices.push(Choice::button(BeginPlay));
             }
@@ -792,7 +792,14 @@ mod tests {
             run(room, Role::Seat(index), Action::RevealInitialCards, pair);
             run(room, Role::Seat(index), Action::ConfirmInitialLook, vec![]);
         }
+        let host = room.players[0].token.clone();
+        let phone_start = command(room, "phone-start", Action::BeginPlay, vec![]);
+        assert_eq!(
+            room.command(&host, Role::Seat(0), phone_start),
+            Err("actionUnavailable")
+        );
         run(room, Role::CreatorBoard, Action::BeginPlay, vec![]);
+        assert!(room.actions(Role::CreatorBoard).is_empty());
     }
 
     #[test]

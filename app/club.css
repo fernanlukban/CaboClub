@@ -64,3 +64,18 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 .table-controls{position:absolute;top:3.5rem;right:1rem;max-width:min(25rem,90%);z-index:3;background:#122b25;border:1px solid var(--edge);padding:.75rem;border-radius:8px}
 .moving-card{position:fixed;pointer-events:none;z-index:4}
 .stage .piles [aria-label^="Draw"]{touch-action:none}
+
+.tabletop-view{gap:clamp(.25rem,1.5vmin,.85rem)}
+.tabletop{display:grid;grid-template:" . north . " auto "west center east" minmax(0,1fr) " . south . " auto / minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr);align-items:center;gap:clamp(5px,1.8vmin,16px);width:min(100%,58rem);padding:clamp(8px,2vmin,20px);border:1px solid var(--edge);border-radius:clamp(12px,4vmin,35px);background:#102a245e}
+.tabletop-seat{display:grid;justify-items:center;gap:.25rem;min-width:0;padding:clamp(4px,1vmin,10px);border:1px solid var(--edge);border-radius:9px;background:#102a23b8}
+.tabletop-seat.current{border-color:var(--gold);background:#304936}
+.tabletop-seat strong{overflow-wrap:anywhere}
+.tabletop-seat small{font-size:clamp(.62rem,1.5vmin,.9rem);color:var(--muted)}
+.tabletop-seat.north{grid-area:north}
+.tabletop-seat.south{grid-area:south}
+.tabletop-seat.west{grid-area:west}
+.tabletop-seat.east{grid-area:east}
+.tabletop-center{grid-area:center;min-width:0;display:grid;place-items:center}
+.tabletop-hand{display:flex;justify-content:center;flex-wrap:wrap;gap:clamp(2px,.7vmin,6px);width:100%}
+.tabletop-hand .card{--card-width:clamp(18px,5.1vmin,44px);font-size:clamp(.7rem,2.5vmin,1.4rem);cursor:default}
+.tabletop-center .pile .card{--card-width:clamp(28px,10vmin,88px);cursor:default}

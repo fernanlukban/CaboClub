@@ -1,6 +1,6 @@
 # Cabo Club app design
 
-Cabo Club turns an iPad into the shared table and each phone into a player's private hand. A player should be able to join, look at their cards, and take a turn with the same gestures they would use around a physical table. The iPad is optional once the phones have joined.
+Cabo Club turns an iPad into the shared table and each phone into a player's private hand. A player should be able to join, look at their cards, and take a turn with the same gestures they would use around a physical table. An active board starts each round. Phones can continue playing if it disconnects during a round.
 
 This document specifies presentation and interaction. [SPEC.md](SPEC.md) defines game rules, permissions, and the snapshot contract.
 
@@ -19,7 +19,7 @@ The tabletop home has two entry points:
 | **Join a game** | Resume the current board session or enter the room and a host-issued board pairing code. Open directly to the current lobby, turn, or results using the latest board snapshot. |
 | **Create a new game** | Open a lobby with a large QR code, a short room code for manual entry, and the seats as players join. The QR opens the private player join screen on a phone. |
 
-Lay out the deck and discard at the center of the board, with seat names, scores, and turn indicators around them. Use generous spacing and readable names and values from both sides of the table. During the opening look, show which seats are ready. Once all seats confirm, show **Start game** on the iPad. Later rounds use **Start round**. During play, the iPad displays the current turn, remaining deck, top discard, Cabo final turns, and public results. The board does not display private reveals or player move controls.
+Place the deck next to the discard pile in the center. Reserve one seat for each cardinal direction. Show each occupied seat’s card backs during play, then show public faces at scoring. Keep seats fixed as hands change and show the name, score, and current-turn indicator beside each hand. Use generous spacing and readable names and values from both sides of the table. During the opening look, show which seats are ready. Once all seats confirm, show **Start game** on the iPad. Later rounds use **Start round**. During play, the iPad displays the current turn, remaining deck, top discard, Cabo final turns, and public results. While a round is playing, the board is a display. It shows public state only. Keep the board route through refresh and reconnect.
 
 If the board disconnects, show a reconnecting state while the phones continue. If the board is revoked, clear the game view and return to tabletop home.
 
