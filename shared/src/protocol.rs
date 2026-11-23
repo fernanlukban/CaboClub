@@ -84,6 +84,7 @@ impl Choice {
 pub struct CardView {
     pub slot: u32,
     pub rank: Option<u8>,
+    pub face_up: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -116,6 +117,8 @@ pub struct PlayerView {
     pub name: String,
     pub score: u16,
     pub ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opening_look_slots: Option<[u32; 2]>,
     pub bot: bool,
     pub cards: Vec<CardView>,
 }
@@ -166,6 +169,15 @@ pub struct PowerResult {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MatchFlip {
+    pub revision: u64,
+    pub actor_seat_id: u64,
+    pub slots: Vec<u32>,
+    pub newly_face_up_slots: Vec<u32>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MatchOutcome {
     pub revision: u64,
     pub matched: bool,
@@ -197,6 +209,8 @@ pub struct Snapshot {
     pub incoming: Option<CardView>,
     pub pending_power: Option<PendingPower>,
     pub private_power_result: Option<PowerResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_flip: Option<MatchFlip>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_outcome: Option<MatchOutcome>,
     pub test: Option<TestView>,

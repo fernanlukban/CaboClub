@@ -256,16 +256,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let port: u16 = env::var("PORT").unwrap_or_else(|_| "8080".into()).parse()?;
     let app_dir = env::var("CABO_APP_DIR").unwrap_or_else(|_| "app/dist".into());
     let rooms = Rooms::default();
-    let bot_rooms = rooms.clone();
+    let ticking_rooms = rooms.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(200));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
             let now = Instant::now();
-            for room in bot_rooms.lock().await.values_mut() {
+            for room in ticking_rooms.lock().await.values_mut() {
                 if now.saturating_duration_since(room.last_active) < Duration::from_secs(8 * 3600) {
-                    room.tick_bot(now);
+                    room.tick(now);
                 }
             }
         }

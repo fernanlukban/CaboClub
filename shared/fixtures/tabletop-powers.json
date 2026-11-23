@@ -79,5 +79,42 @@
     "revision": 41,
     "dealId": 3,
     "matchOutcome": {"revision": 41, "matched": false, "source": "discardTop", "incomingSlot": 48, "placement": "right", "discardedSlots": [], "penaltySlot": null}
+  },
+  "boardMatchFlip": {
+    "role": "board",
+    "revision": 42,
+    "turnSeatId": 2,
+    "matchFlip": {"revision": 42, "actorSeatId": 2, "slots": [48, 49], "newlyFaceUpSlots": [49]},
+    "players": [{"seatId": 2, "cards": [
+      {"slot": 48, "rank": 5, "faceUp": true},
+      {"slot": 49, "rank": 7, "faceUp": true},
+      {"slot": 50, "rank": null, "faceUp": false}
+    ]}],
+    "incoming": null,
+    "availableActions": []
+  },
+  "boardAfterMatchMiss": {
+    "role": "board",
+    "revision": 43,
+    "turnSeatId": 1,
+    "players": [{"seatId": 2, "cards": [
+      {"slot": 48, "rank": 5, "faceUp": true},
+      {"slot": 49, "rank": 7, "faceUp": true},
+      {"slot": 50, "rank": null, "faceUp": false},
+      {"slot": 51, "rank": 2, "faceUp": true}
+    ]}],
+    "incoming": null,
+    "availableActions": []
+  },
+  "boardOpeningLook": {
+    "role": "board",
+    "phase": "playing",
+    "revision": 40,
+    "players": [{"seatId": 2, "ready": false, "openingLookSlots": [49, 52], "cards": [
+      {"slot": 48, "rank": null, "faceUp": false},
+      {"slot": 49, "rank": null, "faceUp": false},
+      {"slot": 50, "rank": null, "faceUp": false},
+      {"slot": 52, "rank": null, "faceUp": false}
+    ]}]
   }
 }

@@ -19,7 +19,7 @@ The `/tabletop` route opens the board on any device. The tabletop home has two e
 | **Join a game** | Resume the current board session or enter the room and a host-issued board pairing code. Open directly to the current lobby, turn, or results using the latest board snapshot. |
 | **Create a new game** | Open a lobby with a large QR code, a short room code for manual entry, and the seats as players join. The QR opens the private player join screen on a phone. |
 
-Place the deck next to the discard pile in the center. Reserve one seat for each cardinal direction. Show each occupied seat’s card backs during play, then show public faces at scoring. Keep seats fixed as hands change. Orient each hand in one row parallel to its table edge, with the name, score, and current state below it in the same orientation. Show face-up ranks in all four corners. Use generous spacing and readable names and values from both sides of the table. During the opening look, show which seats are ready. Once all seats confirm, show **Choose who starts** and **Start game** on the iPad for a new game. The previous round winner starts subsequent rounds. Later rounds use **Start round**. During play, the iPad displays the current turn, remaining deck, top discard, Cabo final turns, and public results. While a round is playing, the board is a display. It shows public state only. Keep the board route through refresh and reconnect.
+Place the deck next to the discard pile in the center. Reserve one seat for each cardinal direction. Show public faces for cards taken from discard or revealed by a match. Reveal the remaining cards at scoring. Keep seats fixed as hands change. Orient each hand in one row parallel to its table edge, with the name, score, and current state below it in the same orientation. Show face-up ranks in all four corners. Use generous spacing and readable names and values from both sides of the table. During the opening look, show which seats are ready. Outline each confirmed pair of card backs in gold and add a checkmark. Keep the marks through round start until the first move. Once all seats confirm, show **Choose who starts** and **Start game** on the iPad for a new game. The previous round winner starts subsequent rounds. Later rounds use **Start round**. During play, the iPad displays the current turn, remaining deck, top discard, Cabo final turns, and public results. While a round is playing, the board is a display. It shows public state only. Keep the board route through refresh and reconnect.
 
 If the board disconnects, show a reconnecting state while the phones continue. If the board is revoked, clear the game view and return to tabletop home.
 
@@ -36,6 +36,8 @@ Use a compact status strip, a card stage, and an action strip above the bottom s
 | Your turn | Ease out to a wider view, shrink and translate the hand downward, and reveal a second row above it for the deck and discard. Present the server-provided actions beside or below the stage. |
 | Resolving a move | Show the incoming card at the edge of the hand. Keep the incoming rank legible. Raise selected hand cards and present only the actions offered for this step. |
 | Round or game result | Show publicly revealed hands, points this round, total scores, and winners when available. The host or room-creating board can prepare the next deal. |
+
+When another player calls a match, show their selected cards in a temporary row above the viewer’s hand. On the caller’s phone and the iPad, flip the newly exposed cards in their existing slots. Use the shared match state to dismiss the temporary row as the move resolves. A missed match leaves publicly revealed cards face up in the caller’s hand. Already-public cards stay face up throughout the move.
 
 Fit the entire current hand without horizontal or vertical scrolling. Size cards from the available stage area and the number of visible slots, including the pending incoming card. Tighten gaps or stagger rows for larger hands while preserving individual targets. Keep stable slot positions during reveals and retain the relative order of cards that remain after exchanges. Compact the affected row only after the move resolves.
 
@@ -80,7 +82,7 @@ Verify the platform path before calling the browser build ready:
 ## Interaction checks
 
 - Create on the iPad and scan the QR with two phones. Verify all three views use the same game revision and the board never receives private ranks.
-- Reveal two non-adjacent slots, confirm, and reload before starting. Verify both cards stay face down.
+- Reveal two non-adjacent slots, confirm, and reload before starting. Verify both cards stay face down. On the iPad, verify the exact two backs are marked for each confirmed seat, then check that the marks clear on the first move.
 - Draw from each pile, match before drawing and after drawing, and verify a three-card match shrinks the hand correctly. Check that a hand still fits after a penalty grows it.
 - Switch between waiting and active turn with reduced motion on and off. Check both landscape orientations, an incoming card, larger hands, and independent card selection.
 - Pair a board after play starts, disconnect it during a turn, and resume at the current state.
