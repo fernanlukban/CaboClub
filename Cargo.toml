@@ -1,6 +1,6 @@
 [workspace]
-members = ["app", "server", "shared"]
-default-members = ["server", "shared"]
+members = ["app", "server", "server/room", "shared"]
+default-members = ["server", "server/room", "shared"]
 resolver = "3"
 
 [workspace.package]

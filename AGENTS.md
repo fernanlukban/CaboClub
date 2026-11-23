@@ -1,9 +1,10 @@
 # Working in Cabo Club
 
 Read [SPEC.md](SPEC.md) before changing gameplay, hosting, or the client/server protocol. Read the relevant crate before editing and keep changes scoped to the requested behavior.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the workspace dependency boundaries and the checks to consider when changing them.
 
 - Put rendering, input, animation, and client-side interaction state in `app/`. Keep it buildable for `wasm32-unknown-unknown`.
-- Put HTTP, sessions, room lifecycle, randomness, state storage, and player-specific view construction in `server/`. Validate each command against current server state and authenticated seat.
+- Put HTTP, room storage, expiry, and runtime scheduling in `server/`. Put sessions, authoritative game state, room transitions, randomness, and role-scoped views in `server/room/`. Validate each command against current room state and the authenticated seat.
 - Put deterministic rules, domain types, and public wire types in `shared/`. Keep it usable without Bevy, Axum, networking, or a runtime.
 - Render full seat-scoped snapshots and build gameplay controls from `availableActions`. Keep legality, visibility, and state transitions on the server. Use shared rule code to keep action enumeration and command validation aligned.
 - Treat the paired board as a public role with `beginPlay` after readiness, scoped Spy and Swap target staging, and deal actions only for its own created room. Build its snapshot on the server and use role-specific fixtures to verify that private card knowledge and player actions never reach it.
@@ -14,6 +15,6 @@ Read [SPEC.md](SPEC.md) before changing gameplay, hosting, or the client/server 
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p cabo-shared -p cabo-server
+cargo test -p cabo-shared -p cabo-room -p cabo-server
 cargo check -p cabo-app --target wasm32-unknown-unknown
 ```

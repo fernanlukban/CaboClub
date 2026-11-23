@@ -4,6 +4,38 @@ const query = new URLSearchParams(location.search);
 const use3d = query.get("scene") === "3d";
 const sceneMotion = matchMedia("(prefers-reduced-motion: reduce)");
 let sceneFailed = false;
+let sceneLayout;
+let sceneAnchors = [];
+
+function applySceneLayout() {
+  if (!sceneLayout || sceneLayout[0] !== snapshot?.roomId || sceneLayout[1] !== snapshot?.revision) return;
+  const anchors = new Map(sceneLayout[2].map(anchor => [anchor.key, anchor]));
+  for (const [element, key] of sceneAnchors) {
+    const anchor = anchors.get(key);
+    if (!anchor) continue;
+    const position = `${anchor.x},${anchor.y},${anchor.width},${anchor.height},${anchor.angle}`;
+    if (element.dataset.scenePosition === position) continue;
+    element.dataset.scenePosition = position;
+    for (const property of ["x", "y", "width", "height", "angle"]) {
+      element.style.setProperty(`--scene-${property}`, `${anchor[property]}${property === "angle" ? "deg" : "px"}`);
+    }
+  }
+}
+
+function bindSceneAnchors() {
+  if (!document.body.classList.contains("bevy-scene")) return;
+  sceneAnchors = [...root.querySelectorAll("[data-scene-anchor], .card[data-sprite]")].map(element => {
+    let key = element.dataset.sceneAnchor;
+    if (!key) {
+      const pile = element.closest("[data-pile]");
+      key = pile ? `pile:${pile.dataset.pile}` :
+        `${element.closest(".match-reveal") ? "match" : "hand"}:${element.dataset.sprite}`;
+    }
+    return [element, key];
+  });
+  applySceneLayout();
+}
+
 
 function syncScene() {
   if (!use3d || sceneFailed || !window.wasmBindings?.set_scene_frame) return;
@@ -401,9 +433,11 @@ function piles(interactive = false) {
     deckCard.addEventListener("pointercancel", () => { start = undefined; });
   }
   return node("div",{class:"piles"},
-    node("div",{class:"pile"},deckCard,`Deck · ${snapshot.deckCount}`),
-    node("div",{class:"pile"},card(snapshot.discardTop===null?null:{rank:snapshot.discardTop},0,
-      interactive&&discard?()=>submit(discard):null,false,`${mode==="board"?"Discard pile":"Take discard"}${snapshot.discardTop===null?"":", rank "+snapshot.discardTop}`),"Discard"));
+    node("div",{class:"pile","data-pile":"deck"},deckCard,
+      node("span",{class:"pile-caption","data-scene-anchor":"label:deck"},`Deck · ${snapshot.deckCount}`)),
+    node("div",{class:"pile","data-pile":"discard"},card(snapshot.discardTop===null?null:{rank:snapshot.discardTop},0,
+      interactive&&discard?()=>submit(discard):null,false,`${mode==="board"?"Discard pile":"Take discard"}${snapshot.discardTop===null?"":", rank "+snapshot.discardTop}`),
+      node("span",{class:"pile-caption","data-scene-anchor":"label:discard"},"Discard")));
 }
 function status() {
   const turn = snapshot.players.find(p=>p.seatId===snapshot.turnSeatId);
@@ -473,10 +507,11 @@ function actionStrip(filter = () => true) {
 }
 function summary(showCards = false) {
   const occupied = compassSeats(snapshot.players).filter(seat=>seat.player);
-  return node("div",{class:"seats"},...occupied.map(({player:p,title})=>{
+  return node("div",{class:"seats"},...occupied.map(({player:p,title,direction})=>{
     const result = snapshot.results.find(item=>item.seatId===p.seatId);
     return node("div",{class:`seat ${p.seatId===snapshot.turnSeatId?"current":""}`},
-      node("strong",{},title),node("small",{},["initialPreview","readyToStart"].includes(snapshot.phase)?(p.ready?"Ready":"Looking"): `${p.score} points${result?` · +${result.points} this round`:""}`),
+      node("div",{class:"tabletop-caption","data-scene-anchor":showCards ? `seat:${direction}` : undefined},
+        node("strong",{},title),node("small",{},["initialPreview","readyToStart"].includes(snapshot.phase)?(p.ready?"Ready":"Looking"): `${p.score} points${result?` · +${result.points} this round`:""}`)),
       showCards?node("div",{class:"result-cards"},...p.cards.map((item,index)=>card(item,index))):null);
   }));
 }
@@ -558,8 +593,9 @@ function tabletop(center, miniature = false) {
             const label = `${player.name} · Card ${index+1}${visibleCard.rank===null?", face down":", rank "+visibleCard.rank}${lookedAt?", looked at during opening":""}`;
             return card(visibleCard,index,pick,selected||privateLook,label,lookedAt,privateLook && item.rank===null);
           })):null,
-        node("strong",{},title),
-        player&&!miniature?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null));
+        node("div",{class:"tabletop-caption","data-scene-anchor":`seat:${direction}`},
+          node("strong",{},title),
+          player&&!miniature?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null)));
   }),node("div",{class:"tabletop-center"},center));
 }
 
@@ -580,20 +616,20 @@ function lobbyOrBoard() {
   if (mode==="board") {
     return node("section",{class:"board tabletop-view"},node("h2",{},heading),
       tabletop(lobby?invite:piles()),
-      snapshot.test?node("p",{class:"status"},`TEST room · ${snapshot.test.scenario} · Seed ${snapshot.test.seed}`):null,
+      node("div",{class:"tabletop-hud"},snapshot.test?node("p",{class:"status"},`TEST room · ${snapshot.test.scenario} · Seed ${snapshot.test.seed}`):null,
       powerPrompt()?node("p",{class:"status",role:"status"},powerPrompt()):null,
       snapshot.message.endsWith("’s turn was skipped.")?node("p",{class:"status",role:"status"},snapshot.message):null,
       winner?node("p",{},`Winner: ${winner}`):null,
       snapshot.caboCaller?node("p",{},`Cabo · ${snapshot.finalTurns.length} final turns remaining`):null,
       snapshot.availableActions.length?actionStrip():null,
-      notice?node("p",{role:"status"},notice):null);
+      notice?node("p",{role:"status"},notice):null));
   }
-  return node("section",{class:lobby?"lobby":"board"},node("h2",{},heading),invite,
-    summary(results),winner?node("p",{},`Winner: ${winner}`):null,
-    !lobby&&!results?piles():null,
-    snapshot.caboCaller?node("p",{},`Cabo · ${snapshot.finalTurns.length} final turns remaining`):null,
-    actionStrip(),powerToast(),pairing?node("p",{},`Board pairing code: ${pairing}`):null,
-    notice?node("p",{role:"status"},notice):null);
+  return node("section",{class:lobby?"lobby":results?"board result-view":"board"},node("h2",{},heading),invite,
+    summary(results),!lobby&&!results?piles():null,
+    node("div",{class:"tabletop-hud"},winner?node("p",{},`Winner: ${winner}`):null,
+      snapshot.caboCaller?node("p",{},`Cabo · ${snapshot.finalTurns.length} final turns remaining`):null,
+      actionStrip(),powerToast(),pairing?node("p",{},`Board pairing code: ${pairing}`):null,
+      notice?node("p",{role:"status"},notice):null));
 }
 function phone() {
   const active = snapshot.phase==="playing"&&snapshot.turnSeatId===snapshot.youSeatId;
@@ -716,9 +752,14 @@ function render() {
   animateTabletopSwap = false;
   moveAnimation = undefined;
   animateMatchFlip = false;
+  bindSceneAnchors();
 }
 if (use3d) {
-  window.addEventListener("TrunkApplicationStarted", syncScene);
+  window.addEventListener("TrunkApplicationStarted", () => { syncScene(); bindSceneAnchors(); });
+  window.addEventListener("cabo-scene-layout", event => {
+    sceneLayout = JSON.parse(event.detail);
+    applySceneLayout();
+  });
   document.querySelector("#table").addEventListener("webglcontextlost", () => {
     sceneFailed = true;
     document.body.classList.remove("bevy-scene");

@@ -1325,17 +1325,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cabo-room"
+version = "0.1.0"
+dependencies = [
+ "cabo-shared",
+ "rand",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "cabo-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cabo-room",
  "cabo-shared",
  "qrcode",
  "rand",
  "serde",
  "tokio",
  "tower-http",
- "uuid",
 ]
 
 [[package]]
