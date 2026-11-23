@@ -6,7 +6,7 @@ use std::{
 use cabo_shared::{
     game::{self, MAX_PLAYERS, MIN_PLAYERS, STARTING_HAND_SIZE, cabo_power::Power},
     protocol::{
-        Action, CardView, Choice, Command, PendingPower, PlayerView, PowerResult, RoundResult,
+        Action, CardView, Choice, Command, MatchOutcome, PendingPower, PlayerView, PowerResult, RoundResult,
         Snapshot, TestScenario, TestView,
     },
     round_start::{Phase as SetupPhase, Preview, RoundStart},
@@ -65,14 +65,15 @@ struct Round {
     caller: Option<usize>,
     final_turns: VecDeque<usize>,
     results: Vec<(u16, u16)>,
-    private_reveal: Option<(usize, Card)>,
+    match_outcome: Option<(usize, MatchOutcome)>,
 }
 
 #[derive(Clone, Copy)]
 enum TurnStep {
     Awaiting,
     Incoming { card: Card, from_deck: bool },
-    Peek,
+    Peek(u64),
+    PeekViewing(u64, u8),
     SpySelecting(u64),
     SpyReview(u64, u32),
     SpyViewing(u64, usize, u8),
@@ -84,6 +85,8 @@ enum TurnStep {
 impl TurnStep {
     fn power(self) -> Option<(u64, &'static str, Option<u32>, Option<u32>)> {
         Some(match self {
+            Self::Peek(id) => (id, "peekSelecting", None, None),
+            Self::PeekViewing(id, _) => (id, "peekViewing", None, None),
             Self::SpySelecting(id) => (id, "spySelecting", None, None),
             Self::SpyReview(id, target) => (id, "spyReview", None, Some(target)),
             Self::SpyViewing(id, ..) => (id, "spyViewing", None, None),
@@ -328,7 +331,8 @@ impl Room {
                 choices.push(Choice::button(CancelSetup));
             }
             if round.opening.phase() == SetupPhase::ReadyToStart
-                && matches!(role, Role::Board | Role::CreatorBoard)
+                && (matches!(role, Role::Board | Role::CreatorBoard)
+                    || (host && self.board.is_none() && self.creator.is_none()))
             {
                 choices.push(Choice::button(BeginPlay));
             }
@@ -346,6 +350,9 @@ impl Room {
         }
         if self.phase != Phase::Playing {
             return choices;
+        }
+        if host {
+            choices.push(Choice::button(SkipTurn));
         }
         let index = round.turn;
         let hand = &self.players[index];
@@ -403,7 +410,8 @@ impl Room {
                 }
                 match_cards(&mut choices);
             }
-            TurnStep::Peek => choices.push(Choice::select(Peek, slots(hand), 1, 1)),
+            TurnStep::Peek(_) => choices.push(Choice::select(Peek, slots(hand), 1, 1)),
+            TurnStep::PeekViewing(..) => choices.push(Choice::button(AcknowledgePeek)),
             TurnStep::SpySelecting(_) => {}
             TurnStep::SpyReview(_, target) => {
                 choices.push(Choice::select(ConfirmSpy, vec![target], 1, 1))
@@ -462,6 +470,7 @@ impl Room {
                 | Action::ConfirmInitialLook
                 | Action::BeginPlay
                 | Action::CancelSetup
+                | Action::SkipTurn
         ) && self.round.as_ref().map(|round| round.id) != command.deal_id
         {
             return Err("staleDeal");
@@ -484,7 +493,9 @@ impl Room {
         }
         if matches!(
             command.action,
-            Action::SelectPowerOwnCard
+            Action::Peek
+                | Action::AcknowledgePeek
+                | Action::SelectPowerOwnCard
                 | Action::StagePowerTarget
                 | Action::ConfirmSpy
                 | Action::ConfirmSwap
@@ -612,6 +623,13 @@ impl Room {
                 }
                 "Test restarted. Deal cards to begin."
             }
+            SkipTurn => {
+                let actor = self.round.as_ref().unwrap().turn;
+                self.play(actor, command);
+                let message = format!("{}’s turn was skipped.", self.players[actor].name);
+                self.changed(&message);
+                return Ok(message);
+            }
             _ => {
                 let actor = self.round.as_ref().unwrap().turn;
                 self.play(actor, command)
@@ -697,7 +715,7 @@ impl Room {
             caller: None,
             final_turns: VecDeque::new(),
             results: vec![],
-            private_reveal: None,
+            match_outcome: None,
         });
         self.next_deal += 1;
         self.phase = Phase::Setup;
@@ -711,9 +729,6 @@ impl Room {
             TurnStep::Incoming { card, .. } => Some(card),
             _ => None,
         };
-        if round.private_reveal.is_some_and(|(owner, _)| owner == seat) {
-            round.private_reveal = None;
-        }
         let note = match command.action {
             DrawDeck | DrawDiscard => {
                 let from_deck = command.action == DrawDeck;
@@ -743,7 +758,18 @@ impl Room {
                 round.discard.push(incoming.unwrap());
                 "A player discarded their draw."
             }
+            SkipTurn => {
+                if let Some(card) = incoming {
+                    round.discard.push(card);
+                }
+                "The host skipped the active player's turn."
+            }
             CallMatch => {
+                let source = match round.step {
+                    TurnStep::Incoming { from_deck: true, .. } => "deck",
+                    TurnStep::Incoming { .. } => "discardPickup",
+                    _ => "discardTop",
+                };
                 let card = incoming.unwrap_or_else(|| round.discard.pop().unwrap());
                 let hand = &mut self.players[seat].hand;
                 let selected: Vec<_> = hand
@@ -752,7 +778,19 @@ impl Room {
                     .filter(|(_, c)| command.slots.contains(&c.slot))
                     .map(|(index, c)| (index, *c))
                     .collect();
-                if game::cards_match(&selected.iter().map(|(_, c)| c.rank).collect::<Vec<_>>()) {
+                let ranks: Vec<_> = selected.iter().map(|(_, card)| card.rank).collect();
+                let mut outcome = MatchOutcome {
+                    revision: self.revision + 1,
+                    matched: game::cards_match(&ranks),
+                    source,
+                    incoming_slot: card.slot,
+                    placement: if command.insert_left { "left" } else { "right" },
+                    discarded_slots: vec![],
+                    penalty_slot: None,
+                };
+                let message = if outcome.matched {
+                    outcome.placement = "firstSelected";
+                    outcome.discarded_slots = selected.iter().map(|(_, card)| card.slot).collect();
                     for (index, _) in selected.iter().rev() {
                         hand.remove(*index);
                     }
@@ -767,11 +805,18 @@ impl Room {
                     }
                     if selected.len() >= 3 {
                         if let Some(penalty) = round.deck.pop() {
+                            outcome.penalty_slot = Some(penalty.slot);
                             hand.push(penalty);
                         }
                     }
-                    "The match missed. A penalty was added."
-                }
+                    if outcome.penalty_slot.is_some() {
+                        "No match. Incoming card kept and one penalty card added."
+                    } else {
+                        "No match. Incoming card kept."
+                    }
+                };
+                round.match_outcome = Some((seat, outcome));
+                message
             }
             CallCabo => {
                 round.caller = Some(seat);
@@ -786,7 +831,7 @@ impl Room {
                 let id = self.next_power;
                 self.next_power += 1;
                 round.step = match game::card_power(card.rank).unwrap() {
-                    Power::Peek => TurnStep::Peek,
+                    Power::Peek => TurnStep::Peek(id),
                     Power::Spy => TurnStep::SpySelecting(id),
                     Power::Swap => TurnStep::SwapSelectingOwn(id),
                 };
@@ -799,8 +844,9 @@ impl Room {
                     .flat_map(|p| &p.hand)
                     .find(|c| c.slot == command.slots[0])
                     .unwrap();
-                round.private_reveal = Some((seat, card));
-                "A player looked at a card."
+                let id = round.step.power().unwrap().0;
+                round.step = TurnStep::PeekViewing(id, card.rank);
+                return "A player is finishing a private look.";
             }
             SelectPowerOwnCard => {
                 let id = round.step.power().unwrap().0;
@@ -837,7 +883,7 @@ impl Room {
                 round.step = TurnStep::SpyViewing(id, owner, rank);
                 return "A player is finishing a private look.";
             }
-            AcknowledgeSpy => "A player finished looking.",
+            AcknowledgePeek | AcknowledgeSpy => "A player finished looking.",
             ConfirmSwap => {
                 self.swap_receipts[seat] = Some(round.step.power().unwrap().0);
                 let own = self.players[seat]
@@ -869,7 +915,11 @@ impl Room {
         }
         if round.deck.is_empty() || (round.caller.is_some() && round.final_turns.is_empty()) {
             self.score();
-            return "The round is complete.";
+            return if command.action == CallMatch {
+                note
+            } else {
+                "The round is complete."
+            };
         }
         round.turn = round
             .final_turns
@@ -887,7 +937,6 @@ impl Room {
             .map(|p| p.hand.iter().map(|c| c.rank).collect())
             .collect();
         round.results = game::round_points(&hands, round.caller);
-        round.private_reveal = None;
         for (p, &(_, points)) in self.players.iter_mut().zip(&round.results) {
             p.score += points;
             if p.score == 100 && !p.reset {
@@ -932,8 +981,7 @@ impl Room {
             let cards = p.hand.iter().enumerate().map(|(j,c)| {
                 let opening = self.phase == Phase::Setup && viewer == Some(i)
                     && matches!(preview, Some(Preview::Revealed(positions)) if positions.contains(&j));
-                let power = round.and_then(|r| r.private_reveal).is_some_and(|(owner, card)| viewer == Some(owner) && c.slot == card.slot);
-                c.view(public || opening || power)
+                c.view(public || opening)
             }).collect();
             PlayerView { seat_id:p.id, name:p.name.clone(), score:p.score,
                 ready: self.phase == Phase::Setup && preview == Some(Preview::Confirmed), bot:p.bot, cards }
@@ -953,7 +1001,9 @@ impl Room {
             Some(PendingPower {
                 power_id,
                 phase,
-                kind: if phase.starts_with("spy") {
+                kind: if phase.starts_with("peek") {
+                    "peek"
+                } else if phase.starts_with("spy") {
                     "spy"
                 } else {
                     "swap"
@@ -965,6 +1015,12 @@ impl Room {
         });
         let private_power_result = round
             .and_then(|round| match round.step {
+                TurnStep::PeekViewing(id, rank) if viewer == Some(round.turn) => Some(PowerResult {
+                    result_id: id,
+                    kind: "peek",
+                    rank: Some(rank),
+                    target_name: None,
+                }),
                 TurnStep::SpyViewing(id, target, rank) if viewer == Some(round.turn) => {
                     Some(PowerResult {
                         result_id: id,
@@ -1039,6 +1095,10 @@ impl Room {
             incoming,
             pending_power,
             private_power_result,
+            match_outcome: round
+                .and_then(|round| round.match_outcome.as_ref())
+                .filter(|(seat, outcome)| viewer == Some(*seat) && outcome.revision == self.revision)
+                .map(|(_, outcome)| outcome.clone()),
             test: self.test.as_ref().map(|test| TestView {
                 scenario: test.scenario,
                 seed: test.seed.to_string(),
@@ -1318,6 +1378,78 @@ mod tests {
         let revision = room.revision;
         room.command(&token, Role::Seat(0), match_cards).unwrap();
         assert_eq!(room.revision, revision);
+    }
+
+    #[test]
+    fn peek_stays_private_until_done_even_on_the_last_draw() {
+        let mut room = setup();
+        start(&mut room);
+        let round = room.round.as_mut().unwrap();
+        let mut draw = round.deck.pop().unwrap();
+        draw.rank = 7;
+        round.deck = vec![draw];
+        run(&mut room, Role::Seat(0), Action::DrawDeck, vec![]);
+        run(&mut room, Role::Seat(0), Action::UseDrawnPower, vec![]);
+        let target = room.players[0].hand[0];
+        run(&mut room, Role::Seat(0), Action::Peek, vec![target.slot]);
+        let actor = room.snapshot(Role::Seat(0));
+        assert_eq!(actor.phase, "playing");
+        assert_eq!(actor.private_power_result.unwrap().rank, Some(target.rank));
+        for role in [Role::Seat(1), Role::CreatorBoard] {
+            assert!(room.snapshot(role).private_power_result.is_none());
+        }
+        run(&mut room, Role::Seat(0), Action::AcknowledgePeek, vec![]);
+        let actor = room.snapshot(Role::Seat(0));
+        assert_eq!(actor.phase, "roundResults");
+        assert!(actor.private_power_result.is_none());
+    }
+
+    #[test]
+    fn host_can_start_after_revoke_and_skip_a_pending_discard_pickup() {
+        let mut room = setup();
+        for index in 0..2 {
+            let pair = slots(&room.players[index])[..2].to_vec();
+            run(&mut room, Role::Seat(index), Action::RevealInitialCards, pair);
+            run(&mut room, Role::Seat(index), Action::ConfirmInitialLook, vec![]);
+        }
+        run(&mut room, Role::Seat(0), Action::RevokeBoard, vec![]);
+        run(&mut room, Role::Seat(0), Action::BeginPlay, vec![]);
+        run(&mut room, Role::Seat(0), Action::CallCabo, vec![]);
+        let discard = room.round.as_ref().unwrap().discard.last().unwrap().slot;
+        let hand = slots(&room.players[1]);
+        run(&mut room, Role::Seat(1), Action::DrawDiscard, vec![]);
+        let guest = room.players[1].token.clone();
+        let unauthorized = command(&room, "guest-skip", Action::SkipTurn, vec![]);
+        assert_eq!(
+            room.command(&guest, Role::Seat(1), unauthorized),
+            Err("actionUnavailable")
+        );
+        let host = room.players[0].token.clone();
+        let skip = command(&room, "host-skip", Action::SkipTurn, vec![]);
+        room.command(&host, Role::Seat(0), skip.clone()).unwrap();
+        assert_eq!(room.snapshot(Role::Seat(0)).phase, "roundResults");
+        assert_eq!(room.round.as_ref().unwrap().discard.last().unwrap().slot, discard);
+        assert_eq!(slots(&room.players[1]), hand);
+        let revision = room.revision;
+        room.command(&host, Role::Seat(0), skip).unwrap();
+        assert_eq!(room.revision, revision);
+    }
+
+    #[test]
+    fn two_card_miss_keeps_incoming_without_adding_a_penalty() {
+        let mut room = setup();
+        start(&mut room);
+        room.players[0].hand[0].rank = 4;
+        room.players[0].hand[1].rank = 5;
+        let pair = slots(&room.players[0])[..2].to_vec();
+        run(&mut room, Role::Seat(0), Action::CallMatch, pair);
+        let result = room.snapshot(Role::Seat(0)).match_outcome.unwrap();
+        assert!(!result.matched);
+        assert!(result.penalty_slot.is_none());
+        assert!(result.discarded_slots.is_empty());
+        assert_eq!(room.players[0].hand.last().unwrap().slot, result.incoming_slot);
+        assert!(room.snapshot(Role::Seat(1)).match_outcome.is_none());
+        assert!(room.snapshot(Role::CreatorBoard).match_outcome.is_none());
     }
 
     #[test]

@@ -18,6 +18,8 @@ pub enum Action {
     CallCabo,
     UseDrawnPower,
     Peek,
+    AcknowledgePeek,
+    SkipTurn,
     SelectPowerOwnCard,
     StagePowerTarget,
     ConfirmSpy,
@@ -139,6 +141,18 @@ pub struct PowerResult {
     pub target_name: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchOutcome {
+    pub revision: u64,
+    pub matched: bool,
+    pub source: &'static str,
+    pub incoming_slot: u32,
+    pub placement: &'static str,
+    pub discarded_slots: Vec<u32>,
+    pub penalty_slot: Option<u32>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -159,6 +173,8 @@ pub struct Snapshot {
     pub incoming: Option<CardView>,
     pub pending_power: Option<PendingPower>,
     pub private_power_result: Option<PowerResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_outcome: Option<MatchOutcome>,
     pub test: Option<TestView>,
     pub cabo_caller: Option<u64>,
     pub final_turns: Vec<u64>,

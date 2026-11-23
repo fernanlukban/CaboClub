@@ -39,5 +39,45 @@
     "pendingPower": {"powerId": 8, "actorSeatId": 1, "kind": "spy", "phase": "spyViewing", "ownSlot": null, "targetSlot": null},
     "privatePowerResult": null,
     "availableActions": []
+  },
+  "peekViewingPhone": {
+    "role": "player",
+    "youSeatId": 2,
+    "dealId": 2,
+    "revision": 28,
+    "pendingPower": {"powerId": 9, "actorSeatId": 2, "kind": "peek", "phase": "peekViewing", "ownSlot": null, "targetSlot": null},
+    "privatePowerResult": {"resultId": 9, "kind": "peek", "rank": 4, "targetName": null},
+    "availableActions": [{"action": "acknowledgePeek", "slots": [], "targets": [], "min": 0, "max": 0, "chooseSide": false}]
+  },
+  "peekViewingBoard": {
+    "role": "board",
+    "youSeatId": null,
+    "dealId": 2,
+    "revision": 28,
+    "pendingPower": {"powerId": 9, "actorSeatId": 2, "kind": "peek", "phase": "peekViewing", "ownSlot": null, "targetSlot": null},
+    "privatePowerResult": null,
+    "availableActions": []
+  },
+  "peekDoneCommand": {"commandId": "peek-done-9", "expectedRevision": 28, "dealId": 2, "powerId": 9, "action": "acknowledgePeek", "slots": []},
+  "hostReadyWithoutBoard": {
+    "role": "player",
+    "youSeatId": 1,
+    "hostSeatId": 1,
+    "phase": "readyToStart",
+    "dealId": 3,
+    "revision": 36,
+    "availableActions": [
+      {"action": "pairBoard", "slots": [], "targets": [], "min": 0, "max": 0, "chooseSide": false},
+      {"action": "cancelSetup", "slots": [], "targets": [], "min": 0, "max": 0, "chooseSide": false},
+      {"action": "beginPlay", "slots": [], "targets": [], "min": 0, "max": 0, "chooseSide": false}
+    ]
+  },
+  "skipCommand": {"commandId": "skip-37", "expectedRevision": 37, "dealId": 3, "action": "skipTurn", "slots": []},
+  "matchMissWithoutPenalty": {
+    "role": "player",
+    "youSeatId": 2,
+    "revision": 41,
+    "dealId": 3,
+    "matchOutcome": {"revision": 41, "matched": false, "source": "discardTop", "incomingSlot": 48, "placement": "right", "discardedSlots": [], "penaltySlot": null}
   }
 }
