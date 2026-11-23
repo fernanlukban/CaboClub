@@ -34,6 +34,7 @@ let pairing = "";
 let insertLeft = false;
 let tableControlsOpen = false;
 let moveAnimation;
+let animateMatchFlip = false;
 let animateTabletopSwap = false;
 
 const labels = {
@@ -106,6 +107,15 @@ function accept(next, force = false, renderNow = true) {
   animateTabletopSwap = mode==="board" && snapshot?.pendingPower?.phase==="swapReview"
     && !next.pendingPower && snapshot.dealId===next.dealId
     && !next.message.endsWith("’s turn was skipped.");
+  animateMatchFlip = Boolean(next.matchFlip && (next.roomId !== snapshot?.roomId
+    || next.matchFlip.revision !== snapshot?.matchFlip?.revision));
+  if (next.matchOutcome?.revision === next.revision) {
+    notice = next.message;
+    if (!force && snapshot?.matchFlip && snapshot.dealId === next.dealId)
+      moveAnimation = { action:"callMatch", match:next.matchOutcome };
+  } else if (snapshot?.matchOutcome && notice === snapshot.message) {
+    notice = "";
+  }
   snapshot = next;
   if (renderNow) render();
 }
@@ -169,12 +179,8 @@ async function submit(choice, explicitSlots) {
     if (response.ok) {
       notice = "";
       if (choice.action === "pairBoard") { pairing = body.detail; tableControlsOpen = true; }
-      const match = body.snapshot?.matchOutcome;
       const nextRevision = body.snapshot?.revision === data.expectedRevision + 1;
-      if (choice.action === "callMatch" && nextRevision && match?.revision === body.snapshot.revision) {
-        notice = body.detail;
-        moveAnimation = { action:choice.action, match };
-      } else if (nextRevision && ["drawDeck","drawDiscard","discardHandCard","discardDrawn"].includes(choice.action)) {
+      if (nextRevision && ["drawDeck","drawDiscard","discardHandCard","discardDrawn"].includes(choice.action)) {
         moveAnimation = { action:choice.action };
       }
       if (choice.action === "skipTurn" && nextRevision) notice = body.detail;
@@ -288,13 +294,14 @@ function top(showTableControls = false) {
     node("span",{},`${snapshot.roomCode} · ${snapshot.round ? "Round " + snapshot.round : "Lobby"}`),
     node("div",{class:"top-controls"},button("Game log",openGameLog),showTableControls?button("Table",()=>{tableControlsOpen=!tableControlsOpen;render();}):null,button("Leave",()=>leave())));
 }
-function card(view, index = 0, action, selected = false, name) {
+function card(view, index = 0, action, selected = false, name, lookedAt = false) {
   const rank = view?.rank;
   const face = rank !== null && rank !== undefined;
+  const flipping = animateMatchFlip && snapshot.matchFlip.newlyFaceUpSlots.includes(view?.slot);
   const props = mode==="board" && !action ? { role:"img" } :
     { type:"button", "aria-pressed":String(selected), disabled:!action || busy, click:action ?? (()=>{}) };
   return node(mode==="board"&&!action?"div":"button",{
-    ...props,class:`card ${face?"face":""} ${selected?"selected":""} ${view?"":"empty"}`,
+    ...props,class:`card ${face?"face":""} ${selected?"selected":""} ${view?"":"empty"} ${flipping?"match-flipping":""} ${lookedAt?"opening-looked":""}`,
     "aria-label": name || `Card ${index+1}${face?", rank "+rank:", face down"}`,
     style:`--index:${index}`,
     "data-sprite":view?.slot === undefined ? (name ?? `card-${index}`) : String(view.slot),
@@ -323,6 +330,8 @@ function piles(interactive = false) {
 }
 function status() {
   const turn = snapshot.players.find(p=>p.seatId===snapshot.turnSeatId);
+  if (snapshot.matchFlip) return turn?.seatId===snapshot.youSeatId
+    ? "Revealing your match" : `${turn?.name} is revealing a match`;
   if (notice) return notice;
   if (snapshot.phase==="initialPreview") return "Waiting for opening looks";
   if (snapshot.phase==="readyToStart") return snapshot.availableActions.some(choice=>choice.action==="beginPlay")
@@ -435,6 +444,7 @@ function tabletop(center) {
   return node("div",{class:"tabletop"},...directions.map(direction=>{
     const player = snapshot.players.find(seat=>seat.direction===direction);
     const current = player && player.seatId===snapshot.turnSeatId;
+    const hand = current && snapshot.incoming ? [...player.cards, snapshot.incoming] : player?.cards;
     const result = snapshot.results.find(item=>item.seatId===player?.seatId);
     const roundStatus = powerPrompt() || (current ? "Your turn" : activePlayer ? `${activePlayer.name}’s turn` :
       snapshot.phase==="initialPreview" ? (player?.ready ? "Ready · waiting for others" : "Opening look") :
@@ -443,11 +453,13 @@ function tabletop(center) {
       snapshot.phase==="gameOver" ? "Game over" : "Lobby");
     return node("section",{class:`tabletop-seat ${direction} ${current?"current":""}`,"aria-label":`${direction} seat`},
       node("div",{class:"tabletop-seat-content"},
-        player?.cards.length?node("div",{class:"tabletop-hand",style:`--cards:${player.cards.length}`},
-          ...player.cards.map((item,index)=>card(item,index,
-            targetChoice?.slots.includes(item.slot)?()=>submit(targetChoice,[item.slot]):null,
-            snapshot.pendingPower?.targetSlot===item.slot,
-            `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}`))):null,
+        hand?.length?node("div",{class:"tabletop-hand",style:`--cards:${hand.length}`},
+          ...hand.map((item,index)=>{
+            const lookedAt = player.openingLookSlots?.includes(item.slot);
+            const label = `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}${lookedAt?", looked at during opening":""}`;
+            return card(item,index,targetChoice?.slots.includes(item.slot)?()=>submit(targetChoice,[item.slot]):null,
+              snapshot.pendingPower?.targetSlot===item.slot,label,lookedAt);
+          })):null,
         node("strong",{},player?.name ?? `${directionLabel(direction)} · Open seat`),
         player?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null));
   }),node("div",{class:"tabletop-center"},center));
@@ -487,7 +499,7 @@ function lobbyOrBoard() {
 function phone() {
   const active = snapshot.phase==="playing"&&snapshot.turnSeatId===snapshot.youSeatId;
   const me = snapshot.players.find(p=>p.seatId===snapshot.youSeatId);
-  const hand = [...me.cards, ...(snapshot.incoming?[snapshot.incoming]:[])];
+  const hand = [...me.cards, ...(active && snapshot.incoming ? [snapshot.incoming] : [])];
   const selectableSlots = selectable();
   const rows = hand.length>8?Math.ceil(hand.length/8):1;
   const cols = Math.max(1,Math.ceil(hand.length/rows));
@@ -500,10 +512,14 @@ function phone() {
   const prompt = opening?`Choose two cards · ${selection.length} of 2`:snapshot.availableActions.some(action=>action.action==="confirmInitialLook")?"Remember these two cards":powerPrompt() || status();
   const playingActions = new Set(["pairBoard","revokeBoard","skipTurn"]);
   const tableActions = snapshot.availableActions.some(choice=>playingActions.has(choice.action));
-  const viewed = !active ? snapshot.players.filter(player=>player.seatId!==me.seatId).flatMap(player=>
-    player.cards.flatMap((view,index)=>view.rank===null?[]:[`${player.name} · Card ${index+1} · ${view.rank}`])) : [];
+  const flip = snapshot.matchFlip;
+  const revealing = flip && flip.actorSeatId !== me.seatId
+    ? snapshot.players.find(player=>player.seatId===flip.actorSeatId) : null;
+  const revealedCards = revealing?.cards.filter(item=>flip.slots.includes(item.slot));
   return node("section",{class:`phone ${active?"active":""}`},top(tableActions),
     node("div",{class:"stage"},piles(active),
+      revealedCards?.length ? node("div",{class:"match-reveal","aria-label":`${revealing.name}’s match cards`},
+        ...revealedCards.map(item=>card(item,revealing.cards.indexOf(item)))) : null,
       node("div",{class:"hand",style:`--cols:${cols};--size:${size}`},...hand.map((item,index)=>card(item,index,ownChoice?.slots.includes(item.slot)?()=>submit(ownChoice,[item.slot]):
         (!snapshot.pendingPower || snapshot.pendingPower.phase==="peekSelecting")&&selectableSlots.has(item.slot)?()=>toggle(item.slot):null,
         snapshot.pendingPower?.ownSlot===item.slot||selection.includes(item.slot)))),
@@ -512,7 +528,7 @@ function phone() {
     node("footer",{},node("p",{class:"status",role:"status"},notice||prompt),
       !notice&&snapshot.message.endsWith("’s turn was skipped.")?node("p",{role:"status"},snapshot.message):null,
       actionStrip(choice=>!playingActions.has(choice.action)),
-      ...viewed.map(label=>node("p",{class:"status"},label)),privateResult),
+      privateResult),
     tableActions&&tableControlsOpen?node("aside",{class:"table-controls"},actionStrip(choice=>playingActions.has(choice.action)),
       pairing?node("p",{},`Board pairing code: ${pairing}`):null):null);
 }
@@ -564,6 +580,9 @@ function render() {
     const nextHand = nextStage.querySelector(".hand");
     previousHand.style.cssText = nextHand.style.cssText;
     previousHand.replaceChildren(...nextHand.children);
+    previousStage.querySelector(".match-reveal")?.remove();
+    const reveal = nextStage.querySelector(".match-reveal");
+    if (reveal) previousHand.before(reveal);
     previousStage.querySelector(".targets")?.remove();
     if (nextStage.querySelector(".targets")) previousStage.append(nextStage.querySelector(".targets"));
     previous.querySelector("footer").replaceWith(next.querySelector("footer"));
@@ -592,6 +611,7 @@ function render() {
   }
   animateTabletopSwap = false;
   moveAnimation = undefined;
+  animateMatchFlip = false;
 }
 render();
 poll();

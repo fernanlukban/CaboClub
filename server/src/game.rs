@@ -6,8 +6,8 @@ use std::{
 use cabo_shared::{
     game::{self, MAX_PLAYERS, MIN_PLAYERS, STARTING_HAND_SIZE, cabo_power::Power},
     protocol::{
-        Action, CardView, Choice, Command, Direction, MatchOutcome, PendingPower, PlayerView,
-        PowerResult, RoundResult, Snapshot, TestScenario, TestView,
+        Action, CardView, Choice, Command, Direction, MatchFlip, MatchOutcome, PendingPower,
+        PlayerView, PowerResult, RoundResult, Snapshot, TestScenario, TestView,
     },
     round_start::{Phase as SetupPhase, Preview, RoundStart},
 };
@@ -15,17 +15,26 @@ use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use serde::Serialize;
 use uuid::Uuid;
 
+const MATCH_FLIP_DURATION: Duration = Duration::from_millis(2600);
+
 #[derive(Clone, Copy)]
 struct Card {
     slot: u32,
     rank: u8,
+    face_up: bool,
 }
 
 impl Card {
+    fn face_up(mut self) -> Self {
+        self.face_up = true;
+        self
+    }
+
     fn view(self, visible: bool) -> CardView {
         CardView {
             slot: self.slot,
-            rank: visible.then_some(self.rank),
+            rank: (self.face_up || visible).then_some(self.rank),
+            face_up: self.face_up,
         }
     }
 }
@@ -60,6 +69,7 @@ enum Phase {
 struct Round {
     id: u64,
     opening: RoundStart,
+    opening_marks_visible: bool,
     deck: Vec<Card>,
     discard: Vec<Card>,
     turn: usize,
@@ -68,12 +78,21 @@ struct Round {
     final_turns: VecDeque<usize>,
     results: Vec<(u16, u16)>,
     match_outcome: Option<(usize, MatchOutcome)>,
+    pending_match: Option<PendingMatch>,
+}
+
+struct PendingMatch {
+    flip: MatchFlip,
+    deadline: Instant,
+    incoming: Option<(Card, bool)>,
+    insert_left: bool,
 }
 
 #[derive(Clone, Copy)]
 enum TurnStep {
     Awaiting,
     Incoming { card: Card, from_deck: bool },
+    MatchFlipping,
     Peek(u64),
     PeekViewing(u64, u8),
     SpySelecting(u64),
@@ -244,6 +263,7 @@ impl Room {
             turn_step: round.filter(|_| self.phase == Phase::Playing).map(|round| {
                 match round.step {
                     TurnStep::Awaiting => "awaiting",
+                    TurnStep::MatchFlipping => "matchFlipping",
                     TurnStep::Incoming {
                         from_deck: true, ..
                     } => "incomingDeck",
@@ -280,6 +300,32 @@ impl Room {
         });
     }
 
+    pub fn tick(&mut self, now: Instant) {
+        if self
+            .round
+            .as_ref()
+            .and_then(|round| round.pending_match.as_ref())
+            .is_some_and(|pending| now >= pending.deadline)
+        {
+            let before = self.log_state();
+            let note = self.resolve_match();
+            self.changed(note);
+            self.record(LogEntry {
+                sequence: 0,
+                event: "matchResolved",
+                action: None,
+                seat: before.turn_seat,
+                board: false,
+                slot_count: 0,
+                result: "accepted",
+                before,
+                after: self.log_state(),
+            });
+            return;
+        }
+        self.tick_bot(now);
+    }
+
     pub fn tick_bot(&mut self, now: Instant) {
         if !self
             .test
@@ -292,7 +338,10 @@ impl Room {
         let actor = match self.phase {
             Phase::Setup => (1..self.players.len()).find(|&i| {
                 self.players[i].bot
-                    && round.opening.preview(self.players[i].id) != Some(Preview::Confirmed)
+                    && !matches!(
+                        round.opening.preview(self.players[i].id),
+                        Some(Preview::Confirmed(_))
+                    )
             }),
             Phase::Playing if self.players[round.turn].bot => Some(round.turn),
             _ => None,
@@ -518,7 +567,7 @@ impl Room {
             }
             return choices;
         }
-        if self.phase != Phase::Playing {
+        if self.phase != Phase::Playing || matches!(round.step, TurnStep::MatchFlipping) {
             return choices;
         }
         if host {
@@ -580,6 +629,7 @@ impl Room {
                 }
                 match_cards(&mut choices);
             }
+            TurnStep::MatchFlipping => unreachable!(),
             TurnStep::Peek(_) => choices.push(Choice::select(Peek, slots(hand), 1, 1)),
             TurnStep::PeekViewing(..) => choices.push(Choice::button(AcknowledgePeek)),
             TurnStep::SpySelecting(_) => {}
@@ -870,7 +920,11 @@ impl Room {
                         break id;
                     }
                 };
-                Card { slot, rank }
+                Card {
+                    slot,
+                    rank,
+                    face_up: false,
+                }
             })
             .collect();
         if let Some(test) = &mut self.test {
@@ -887,7 +941,7 @@ impl Room {
                 player.hand.push(deck.pop().unwrap());
             }
         }
-        let discard = vec![deck.pop().unwrap()];
+        let discard = vec![deck.pop().unwrap().face_up()];
         if self.round_number == 0
             && let Some(test) = &self.test
         {
@@ -921,6 +975,7 @@ impl Room {
             id: self.next_deal,
             opening: RoundStart::new(&self.players.iter().map(|p| p.id).collect::<Vec<_>>())
                 .unwrap(),
+            opening_marks_visible: true,
             deck,
             discard,
             turn,
@@ -929,6 +984,7 @@ impl Room {
             final_turns: VecDeque::new(),
             results: vec![],
             match_outcome: None,
+            pending_match: None,
         });
         self.next_deal += 1;
         self.phase = Phase::Setup;
@@ -942,6 +998,7 @@ impl Room {
             .collect();
         self.swap_receipts[seat] = None;
         let round = self.round.as_mut().unwrap();
+        round.opening_marks_visible = false;
         let incoming = match round.step {
             TurnStep::Incoming { card, .. } => Some(card),
             _ => None,
@@ -957,9 +1014,13 @@ impl Room {
                 let card = pile.pop().unwrap();
                 round.step = TurnStep::Incoming { card, from_deck };
                 if !from_deck && round.discard.is_empty() {
-                    round
-                        .discard
-                        .push(round.deck.pop().expect("an open turn has a deck card"));
+                    round.discard.push(
+                        round
+                            .deck
+                            .pop()
+                            .expect("an open turn has a deck card")
+                            .face_up(),
+                    );
                 }
                 return "A player picked up a card.";
             }
@@ -971,79 +1032,43 @@ impl Room {
                     .unwrap();
                 round
                     .discard
-                    .push(std::mem::replace(&mut hand[index], incoming.unwrap()));
+                    .push(std::mem::replace(&mut hand[index], incoming.unwrap()).face_up());
                 "A player traded a card."
             }
             DiscardDrawn => {
-                round.discard.push(incoming.unwrap());
+                round.discard.push(incoming.unwrap().face_up());
                 "A player discarded their draw."
             }
             SkipTurn => {
                 if let Some(card) = incoming {
-                    round.discard.push(card);
+                    round.discard.push(card.face_up());
                 }
                 "The host skipped the active player's turn."
             }
             CallMatch => {
-                let source = match round.step {
-                    TurnStep::Incoming {
-                        from_deck: true, ..
-                    } => "deck",
-                    TurnStep::Incoming { .. } => "discardPickup",
-                    _ => "discardTop",
-                };
-                let card = incoming.unwrap_or_else(|| round.discard.pop().unwrap());
-                let hand = &mut self.players[seat].hand;
-                let selected: Vec<_> = hand
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| command.slots.contains(&c.slot))
-                    .map(|(index, c)| (index, *c))
-                    .collect();
-                let ranks: Vec<_> = selected.iter().map(|(_, card)| card.rank).collect();
-                let mut outcome = MatchOutcome {
-                    revision: self.revision + 1,
-                    matched: game::cards_match(&ranks),
-                    source,
-                    incoming_slot: card.slot,
-                    placement: if command.insert_left { "left" } else { "right" },
-                    discarded_slots: vec![],
-                    penalty_slot: None,
-                };
-                let message = if outcome.matched {
-                    outcome.placement = "firstSelected";
-                    outcome.discarded_slots = selected.iter().map(|(_, card)| card.slot).collect();
-                    for (index, _) in selected.iter().rev() {
-                        hand.remove(*index);
+                let mut newly_face_up_slots = Vec::new();
+                for card in &mut self.players[seat].hand {
+                    if command.slots.contains(&card.slot) && !card.face_up {
+                        newly_face_up_slots.push(card.slot);
+                        card.face_up = true;
                     }
-                    round.discard.extend(selected.iter().map(|(_, c)| *c));
-                    hand.insert(selected[0].0, card);
-                    "The match was correct."
-                } else {
-                    if command.insert_left {
-                        hand.insert(0, card);
-                    } else {
-                        hand.push(card);
-                    }
-                    if round.discard.is_empty() {
-                        round
-                            .discard
-                            .push(round.deck.pop().expect("an open turn has a deck card"));
-                    }
-                    if selected.len() >= 3 {
-                        if let Some(penalty) = round.deck.pop() {
-                            outcome.penalty_slot = Some(penalty.slot);
-                            hand.push(penalty);
-                        }
-                    }
-                    if outcome.penalty_slot.is_some() {
-                        "No match. Incoming card kept and one penalty card added."
-                    } else {
-                        "No match. Incoming card kept."
-                    }
-                };
-                round.match_outcome = Some((seat, outcome));
-                message
+                }
+                round.pending_match = Some(PendingMatch {
+                    flip: MatchFlip {
+                        revision: self.revision + 1,
+                        actor_seat_id: self.players[seat].id,
+                        slots: command.slots.clone(),
+                        newly_face_up_slots,
+                    },
+                    deadline: Instant::now() + MATCH_FLIP_DURATION,
+                    incoming: match round.step {
+                        TurnStep::Incoming { card, from_deck } => Some((card, from_deck)),
+                        _ => None,
+                    },
+                    insert_left: command.insert_left,
+                });
+                round.step = TurnStep::MatchFlipping;
+                return "A player is revealing a match.";
             }
             CallCabo => {
                 round.caller = Some(seat);
@@ -1052,7 +1077,7 @@ impl Room {
             }
             UseDrawnPower => {
                 let card = incoming.unwrap();
-                round.discard.push(card);
+                round.discard.push(card.face_up());
                 let id = self.next_power;
                 self.next_power += 1;
                 round.step = match game::card_power(card.rank).unwrap() {
@@ -1134,20 +1159,100 @@ impl Room {
             }
             _ => unreachable!(),
         };
+        if self.finish_turn(seat) {
+            "The round is complete."
+        } else {
+            note
+        }
+    }
+
+    fn resolve_match(&mut self) -> &'static str {
+        let round = self.round.as_mut().unwrap();
+        let pending = round.pending_match.take().unwrap();
+        let seat = round.turn;
+        let source = match pending.incoming {
+            Some((_, true)) => "deck",
+            Some((_, false)) => "discardPickup",
+            _ => "discardTop",
+        };
+        let card = pending
+            .incoming
+            .map(|(card, _)| card)
+            .unwrap_or_else(|| round.discard.pop().unwrap());
+        let hand = &mut self.players[seat].hand;
+        let selected: Vec<_> = hand
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| pending.flip.slots.contains(&c.slot))
+            .map(|(index, c)| (index, *c))
+            .collect();
+        let ranks: Vec<_> = selected.iter().map(|(_, card)| card.rank).collect();
+        let mut outcome = MatchOutcome {
+            revision: self.revision + 1,
+            matched: game::cards_match(&ranks),
+            source,
+            incoming_slot: card.slot,
+            placement: if pending.insert_left { "left" } else { "right" },
+            discarded_slots: vec![],
+            penalty_slot: None,
+        };
+        let message = if outcome.matched {
+            outcome.placement = "firstSelected";
+            outcome.discarded_slots = selected.iter().map(|(_, card)| card.slot).collect();
+            for (index, _) in selected.iter().rev() {
+                hand.remove(*index);
+            }
+            round.discard.extend(selected.iter().map(|(_, c)| *c));
+            hand.insert(selected[0].0, card);
+            "The match was correct."
+        } else {
+            if pending.insert_left {
+                hand.insert(0, card);
+            } else {
+                hand.push(card);
+            }
+            if round.discard.is_empty() {
+                round.discard.push(
+                    round
+                        .deck
+                        .pop()
+                        .expect("an open turn has a deck card")
+                        .face_up(),
+                );
+            }
+            if selected.len() >= 3 {
+                if let Some(penalty) = round.deck.pop() {
+                    outcome.penalty_slot = Some(penalty.slot);
+                    hand.push(penalty);
+                }
+            }
+            if outcome.penalty_slot.is_some() {
+                "No match. Incoming card kept and one penalty card added."
+            } else {
+                "No match. Incoming card kept."
+            }
+        };
+        round.match_outcome = Some((seat, outcome));
+        self.finish_turn(seat);
+        message
+    }
+
+    fn finish_turn(&mut self, seat: usize) -> bool {
+        let next_seat = self
+            .counterclockwise_seat_indexes(seat)
+            .find(|&index| index != seat)
+            .unwrap();
+        let round = self.round.as_mut().unwrap();
         round.step = TurnStep::Awaiting;
         if round.final_turns.front() == Some(&seat) {
             round.final_turns.pop_front();
         }
         if round.deck.is_empty() || (round.caller.is_some() && round.final_turns.is_empty()) {
             self.score();
-            return if command.action == CallMatch {
-                note
-            } else {
-                "The round is complete."
-            };
+            return true;
         }
-        round.turn = round.final_turns.front().copied().unwrap_or(turn_order[0]);
-        note
+        round.turn = round.final_turns.front().copied().unwrap_or(next_seat);
+        false
     }
 
     fn score(&mut self) {
@@ -1204,17 +1309,28 @@ impl Room {
                     && matches!(preview, Some(Preview::Revealed(positions)) if positions.contains(&j));
                 c.view(public || opening)
             }).collect();
-            PlayerView { seat_id:p.id, direction:p.direction, name:p.name.clone(), score:p.score,
-                ready: self.phase == Phase::Setup && preview == Some(Preview::Confirmed), bot:p.bot, cards }
-        }).collect();
-        let incoming = round.and_then(|r| {
-            if viewer != Some(r.turn) {
-                return None;
-            }
-            match r.step {
-                TurnStep::Incoming { card, .. } => Some(card.view(true)),
+            let opening_look_slots = match preview {
+                Some(Preview::Confirmed(positions))
+                    if viewer.is_none() && round.is_some_and(|r| r.opening_marks_visible) =>
+                {
+                    Some(positions.map(|position| p.hand[position].slot))
+                }
                 _ => None,
-            }
+            };
+            PlayerView { seat_id:p.id, direction:p.direction, name:p.name.clone(), score:p.score,
+                ready: self.phase == Phase::Setup && matches!(preview, Some(Preview::Confirmed(_))),
+                opening_look_slots, bot:p.bot, cards }
+        }).collect();
+        let incoming = round.and_then(|round| {
+            let card = match round.step {
+                TurnStep::Incoming { card, .. } => Some(card),
+                TurnStep::MatchFlipping => round
+                    .pending_match
+                    .as_ref()
+                    .and_then(|pending| pending.incoming.map(|(card, _)| card)),
+                _ => None,
+            }?;
+            (card.face_up || viewer == Some(round.turn)).then(|| card.view(true))
         });
         let pending_power = round.and_then(|round| {
             let (power_id, phase, own_slot, target_slot) = round.step.power()?;
@@ -1321,6 +1437,9 @@ impl Room {
             incoming,
             pending_power,
             private_power_result,
+            match_flip: round
+                .and_then(|r| r.pending_match.as_ref())
+                .map(|pending| pending.flip.clone()),
             match_outcome: round
                 .and_then(|round| round.match_outcome.as_ref())
                 .filter(|(seat, outcome)| {
@@ -1560,15 +1679,14 @@ mod tests {
         for _ in 0..6 {
             room.tick_bot(Instant::now() + Duration::from_secs(1));
         }
-        assert!(
-            room.players[1..].iter().all(|bot| room
-                .round
+        assert!(room.players[1..].iter().all(|bot| {
+            room.round
                 .as_ref()
                 .unwrap()
                 .opening
                 .preview(bot.id)
-                == Some(Preview::Confirmed))
-        );
+                .is_some_and(|preview| matches!(preview, Preview::Confirmed(_)))
+        }));
         assert_eq!(
             room.round.as_ref().unwrap().opening.preview(1),
             Some(Preview::Hidden)
@@ -1685,6 +1803,7 @@ mod tests {
         run(&mut room, Role::Seat(0), Action::DrawDiscard, vec![]);
         let round = room.round.as_ref().unwrap();
         assert_eq!(round.discard.last().unwrap().slot, replacement.slot);
+        assert!(round.discard.last().unwrap().face_up);
         assert_eq!(round.deck.len(), deck_count - 1);
         assert_eq!(
             room.snapshot(Role::Seat(0)).incoming.unwrap().slot,
@@ -1706,6 +1825,15 @@ mod tests {
         room.round.as_mut().unwrap().deck.truncate(1);
         let selected = slots(&room.players[0])[..3].to_vec();
         run(&mut room, Role::Seat(0), Action::CallMatch, selected);
+        let deadline = room
+            .round
+            .as_ref()
+            .unwrap()
+            .pending_match
+            .as_ref()
+            .unwrap()
+            .deadline;
+        room.tick(deadline);
         let round = room.round.as_ref().unwrap();
         assert_eq!(round.discard.len(), 1);
         assert_eq!(room.players[0].hand.len(), 5);
@@ -1726,6 +1854,12 @@ mod tests {
                 assert!(!round.discard.is_empty(), "seed {seed}, step {step}");
                 let incoming = match round.step {
                     TurnStep::Incoming { card, .. } => Some(card.slot),
+                    TurnStep::MatchFlipping => round
+                        .pending_match
+                        .as_ref()
+                        .unwrap()
+                        .incoming
+                        .map(|(card, _)| card.slot),
                     _ => None,
                 };
                 let all_slots: Vec<_> = round
@@ -1744,6 +1878,10 @@ mod tests {
                 );
                 if room.phase != Phase::Playing {
                     break;
+                }
+                if let Some(pending) = &round.pending_match {
+                    room.tick(pending.deadline);
+                    continue;
                 }
                 let role = Role::Seat(round.turn);
                 let mut actions = room.actions(role);
@@ -1779,7 +1917,27 @@ mod tests {
         let match_cards = command(&room, "match", Action::CallMatch, pair);
         room.command(&token, Role::Seat(0), match_cards.clone())
             .unwrap();
+        let flip = room.round.as_ref().unwrap().pending_match.as_ref().unwrap();
+        let deadline = flip.deadline;
+        let board = room.snapshot(Role::CreatorBoard);
+        assert_eq!(board.match_flip.unwrap().slots.len(), 3);
+        assert_eq!(board.players[0].cards.len(), 4);
+        assert!(
+            board.players[0].cards[..3]
+                .iter()
+                .all(|card| card.face_up && card.rank == Some(4))
+        );
+        assert_eq!(board.players[0].cards[3].rank, None);
+        assert!(
+            room.actions(Role::Seat(0))
+                .iter()
+                .all(|choice| !matches!(choice.action, Action::SkipTurn | Action::CallMatch))
+        );
+        room.tick(deadline - Duration::from_millis(1));
+        assert_eq!(room.round.as_ref().unwrap().turn, 0);
+        room.tick(deadline);
         assert_eq!(room.players[0].hand.len(), 2);
+        assert!(room.players[0].hand[0].face_up);
         assert_eq!(room.players[0].hand[0].slot, previous_discard.slot);
         assert_eq!(room.round.as_ref().unwrap().discard.last().unwrap().rank, 4);
         assert_eq!(room.round.as_ref().unwrap().turn, 1);
@@ -1864,6 +2022,31 @@ mod tests {
         room.players[0].hand[1].rank = 5;
         let pair = slots(&room.players[0])[..2].to_vec();
         run(&mut room, Role::Seat(0), Action::CallMatch, pair);
+        let deadline = room
+            .round
+            .as_ref()
+            .unwrap()
+            .pending_match
+            .as_ref()
+            .unwrap()
+            .deadline;
+        room.tick(deadline);
+        let board = room.snapshot(Role::CreatorBoard);
+        assert!(board.match_flip.is_none());
+        assert_eq!(
+            board.players[0]
+                .cards
+                .iter()
+                .map(|card| card.rank)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(4),
+                Some(5),
+                None,
+                None,
+                Some(room.players[0].hand[4].rank)
+            ]
+        );
         let result = room.snapshot(Role::Seat(0)).match_outcome.unwrap();
         assert!(!result.matched);
         assert!(result.penalty_slot.is_none());
@@ -1874,6 +2057,55 @@ mod tests {
         );
         assert!(room.snapshot(Role::Seat(1)).match_outcome.is_none());
         assert!(room.snapshot(Role::CreatorBoard).match_outcome.is_none());
+    }
+
+    #[test]
+    fn board_marks_opening_slots_without_ranks_until_first_move() {
+        let mut room = setup();
+        start(&mut room);
+        let board = room.snapshot(Role::CreatorBoard);
+        for player in &board.players {
+            let expected = [player.cards[0].slot, player.cards[1].slot];
+            assert_eq!(player.opening_look_slots, Some(expected));
+            assert!(player.cards.iter().all(|card| card.rank.is_none()));
+        }
+        assert!(
+            room.snapshot(Role::Seat(0))
+                .players
+                .iter()
+                .all(|player| player.opening_look_slots.is_none())
+        );
+        run(&mut room, Role::Seat(0), Action::DrawDeck, vec![]);
+        assert!(
+            room.snapshot(Role::CreatorBoard)
+                .players
+                .iter()
+                .all(|player| player.opening_look_slots.is_none())
+        );
+    }
+
+    #[test]
+    fn face_up_discard_stays_public_when_picked_up_and_kept() {
+        let mut room = setup();
+        start(&mut room);
+        let discard = room.round.as_ref().unwrap().discard.last().unwrap().rank;
+        run(&mut room, Role::Seat(0), Action::DrawDiscard, vec![]);
+        let incoming = room.snapshot(Role::CreatorBoard).incoming.unwrap();
+        assert!(incoming.face_up);
+        assert_eq!(incoming.rank, Some(discard));
+        let target = room.players[0].hand[0].slot;
+        run(
+            &mut room,
+            Role::Seat(0),
+            Action::DiscardHandCard,
+            vec![target],
+        );
+        let kept = &room.snapshot(Role::Seat(1)).players[0].cards[0];
+        assert!(kept.face_up);
+        assert_eq!(kept.rank, Some(discard));
+        run(&mut room, Role::Seat(1), Action::DrawDeck, vec![]);
+        assert!(room.snapshot(Role::CreatorBoard).incoming.is_none());
+        assert!(!room.snapshot(Role::Seat(1)).incoming.unwrap().face_up);
     }
 
     #[test]

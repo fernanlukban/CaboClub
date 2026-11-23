@@ -30,7 +30,7 @@ Dealing and starting play happen in two separate steps. Use the same flow for th
 | `readyToStart` | The authorized board, or the host when no board is authorized, selects **Start game** for round one or **Start round** for later rounds. | Enter `playing` and set the first turn in the same mutation. |
 | `playing` | A legal move ends the round under the Cabo or deck exhaustion rules. | Score once and enter `roundResults` or `gameOver`. |
 
-The board displays readiness by seat. It shows its start button only when the server includes `beginPlay` in the board action list. If the board disconnects before starting, reconnect it, pair another board, or revoke board access and start from the host phone. The board never sees the opening card values or generates player confirmations. **I've looked** is an explicit player acknowledgment. The server can verify that a reveal occurred, and the player confirms that they saw it.
+The board displays readiness by seat and marks the two confirmed opening card backs. The board receives their slot IDs through `openingLookSlots` and never receives ranks from an opening look. The marks stay through round start and clear on the first gameplay move. Player snapshots omit the marks. It shows its start button only when the server includes `beginPlay` in the board action list. If the board disconnects before starting, reconnect it, pair another board, or revoke board access and start from the host phone. The board never sees the opening card values or generates player confirmations. **I've looked** is an explicit player acknowledgment. The server can verify that a reveal occurred, and the player confirms that they saw it.
 
 Keep the frozen roster and each seat's preview status in server state. Connection changes neither confirm a seat nor remove it from readiness. If a seat cannot return during the first-round preview, the host can cancel setup and return to the lobby. After a later deal, cancel back to the last results without changing completed scores. Discard the abandoned deal and readiness in both cases. In the first playable version, a confirmed seat remains ready until that setup is canceled or play begins.
 
@@ -54,15 +54,23 @@ Keep the frozen roster and each seat's preview status in server state. Connectio
 
 Players call a match on two or more distinct cards from their own hand. The server compares the selected cards with each other. The incoming card can have any rank. A player who draws first can compare its value with the expected total of the cards they want to replace. The client displays the incoming rank and leaves any arithmetic about hidden cards to the player.
 
-- **Match first.** Capture the current discard top as the incoming card before placing any matched cards on the pile. On success, put the selected cards on the discard pile and keep the captured card at the first selected slot. Taking the discard and resolving the match is one server mutation. A player cannot take one of the cards they just matched.
+- **Match first.** Capture the current discard top as the incoming card before placing any matched cards on the pile. On success, put the selected cards on the discard pile and keep the captured card at the first selected slot. Take the discard during the resolution mutation after the shared flip. A player cannot take one of the cards they just matched.
 - **Draw first.** Use the already drawn card as the replacement. On success, put all selected cards on the discard pile and keep the incoming card at the first selected slot. A successful match of three cards shrinks the hand by two slots. Preserve the relative order of the other cards and keep the discard order deterministic.
-- **Failed match.** Resolve the existing failed-exchange penalty, incoming-card placement, and next turn as one server mutation. Match eligibility describes which slots are selectable and how many can be selected. Matching ranks are never hinted at by the server's action descriptors.
+- **Failed match.** After the shared flip, resolve the failed-exchange penalty, incoming-card placement, and next turn as one server mutation. Match eligibility describes which slots are selectable and how many can be selected. Matching ranks are never hinted at by the server's action descriptors.
 
 Send the selected slot references with `callMatch`. Derive the incoming source from the authoritative turn state. Validate the complete command before touching the deck, discard, or hand. Replaying an accepted command must neither repeat the move nor create another penalty.
 
 ### Discard continuity
 
 From the first deal through scoring, the discard pile always has a visible top. Taking its last card reveals the next deck card as a replacement in the same mutation. On a failed match that consumes the last discard, refill before drawing an extra penalty card. If the refill uses the final deck card, finish the pending move before scoring. The replacement itself never triggers a power.
+
+### Shared match reveal and public cards
+
+Accepting `callMatch` enters a server-owned match flip for 2.6 seconds. The turn and card locations stay fixed while the selected cards become public. The next server tick after the deadline resolves the match, applies any penalty, and advances or scores once. Repeat requests replay the original acceptance. Gameplay and host skip stay unavailable during the reveal.
+
+Every role receives `matchFlip` with the starting revision, actor seat ID, selected slots, and the subset that just became face up. Cards carry `faceUp` in snapshots. A card in the discard pile, taken from discard, or revealed by a match stays public as it moves between hands and piles. Deck draws, penalties, and private opening or power looks do not set `faceUp`. A face-up pending discard pickup is visible to all roles. Private deck pickups remain actor-only.
+
+The tabletop flips newly revealed cards in their existing positions. The caller's phone flips in place. Other phones show the selected cards in a temporary row above their own hand, then remove the row when the server resolves the match. Cards that were already face up stay still. Reduced motion shows the faces immediately.
 
 ## Client/server boundary
 
@@ -171,7 +179,7 @@ Use ease-in-out interpolation for camera zoom, camera translation, and card move
 
 ### Snapshot and permission boundary
 
-Use the same room and revision stream for both roles. Project a complete public board snapshot from the authoritative state on the server. The shared JSON envelope identifies the board role and has null values for seat-specific fields. The board receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes public board reads, `beginPlay` for a ready deal, and target staging for a pending Spy or Swap. Authorize deal commands only for the board session that created the room. Bind every board command to the current room, phase, and session. Test rooms also expose restart controls to their creating board. Require a player session for every other game command. Board command responses use the public projection.
+Use the same room and revision stream for both roles. Project a complete public board snapshot from the authoritative state on the server. The shared JSON envelope identifies the board role and has null values for seat-specific fields. The board receives public face-up cards and match flips. It receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes public board reads, `beginPlay` for a ready deal, and target staging for a pending Spy or Swap. Authorize deal commands only for the board session that created the room. Bind every board command to the current room, phase, and session. Test rooms also expose restart controls to their creating board. Require a player session for every other game command. Board command responses use the public projection.
 
 Keep the board route explicit when persisting the room URL and use distinct board and player sessions. The board projects card backs until ranks are public and uses the same seat position throughout the game. Phones still receive their normal complete seat snapshots. Landscape layout is a presentation choice. Any Bevy or native client can render the board or a player hand from the relevant role's snapshot.
 

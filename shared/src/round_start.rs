@@ -13,7 +13,7 @@ pub enum Phase {
 pub enum Preview {
     Hidden,
     Revealed([usize; 2]),
-    Confirmed,
+    Confirmed([usize; 2]),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,14 +80,14 @@ impl RoundStart {
 
     pub fn confirm(&mut self, seat: SeatId) -> Result<(), SetupError> {
         let preview = self.preview_mut(seat)?;
-        if !matches!(*preview, Preview::Revealed(_)) {
+        let Preview::Revealed(slots) = *preview else {
             return Err(SetupError::InvalidTransition);
-        }
-        *preview = Preview::Confirmed;
+        };
+        *preview = Preview::Confirmed(slots);
         if self
             .previews
             .iter()
-            .all(|&(_, preview)| preview == Preview::Confirmed)
+            .all(|&(_, preview)| matches!(preview, Preview::Confirmed(_)))
         {
             self.phase = Phase::ReadyToStart;
         }
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(setup.preview(20), Some(Preview::Hidden));
 
         setup.confirm(10).unwrap();
-        assert_eq!(setup.preview(10), Some(Preview::Confirmed));
+        assert_eq!(setup.preview(10), Some(Preview::Confirmed([0, 2])));
         assert_eq!(setup.confirm(10), Err(SetupError::InvalidTransition));
         assert_eq!(setup.begin_play(), Err(SetupError::NotReady));
         assert_eq!(setup.phase(), Phase::InitialPreview);
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(setup.reveal(10, [0, 2]), Err(SetupError::InvalidTransition));
         assert_eq!(setup.preview(10), Some(Preview::Revealed([3, 1])));
         setup.confirm(10).unwrap();
-        assert_eq!(setup.preview(10), Some(Preview::Confirmed));
+        assert_eq!(setup.preview(10), Some(Preview::Confirmed([3, 1])));
     }
 
     #[test]
