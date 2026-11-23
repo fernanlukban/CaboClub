@@ -6,9 +6,9 @@ Two to four players can open a browser, create a private table or join via an in
 
 ## Ownership
 
-- **app/** renders the lobby, table, scores, and results with Bevy. It translates input into commands, renders player-specific snapshots, and uses shared validation to guide available controls.
+- **app/** renders the lobby, table, scores, and results with Bevy. It renders player-specific snapshots, presents the server's enumerated actions, and translates selections into commands.
 - **server/** serves the browser build, creates and expires rooms, issues seat credentials, authenticates players, shuffles and deals, advances games, and publishes views. It serializes updates within each room and owns the authoritative game state.
-- **shared/** owns pure rule types, move validation, and scoring. Transport-neutral request and view types belong here when introduced. Full state and player-visible snapshots require distinct types so hidden information cannot accidentally be serialized into client responses.
+- **shared/** owns pure rule types, move validation, and scoring. Transport-neutral request, snapshot, and action descriptor types belong here when introduced. Full state and player-visible snapshots require distinct types so hidden information cannot accidentally be serialized into client responses.
 
 ## Game lifecycle
 
@@ -18,14 +18,52 @@ Two to four players can open a browser, create a private table or join via an in
 4. Reveal hands at round end. A caller tied for the lowest hand scores zero. Otherwise the caller adds ten to their hand total. A hand of 12, 12, 13, 13 scores zero and awards each opponent 50. Exactly 100 resets a player's total to 50 once per game. A total above 100 ends the game and the lowest total wins, with last-round points breaking ties where possible.
 5. The host starts the next round or a new game after completion. Preserve the deployed app's detailed match, penalty, turn order, and scoring behavior in regression cases during the port.
 
-## Multiplayer contract
+## Client/server boundary
 
-Start with same-origin JSON endpoints for create, join, resume or refresh, and submit command. Use snapshot polling for the first playable version. The interface can add push updates later without moving game authority to the client.
+The wire contract is versioned JSON. `shared/` will define the Rust types for snapshots, action descriptors, and commands. A native client can implement the same contract directly in Swift. Bevy and native clients own rendering, accessibility, animation, selection, and transport. Game outcomes, visibility, phase transitions, scoring, and available actions come from the server. The server uses shared rules to validate moves and enumerate actions from the same revision.
 
-- Require a private seat credential for subsequent requests. The invite code locates a room and can be shared. Keep credentials out of invite URLs, room snapshots, and logs.
-- A command carries a unique command ID and the room revision the client acted on. Stale commands return a fresh authorized snapshot. Repeating an accepted ID for the same seat returns its recorded outcome without replaying the move.
-- The server checks authentication, host privileges, phase, turn ownership, and shared rules before committing. Each accepted mutation advances the room revision. Rejections leave game state unchanged.
-- The response is built for the requesting seat. Before scoring, reveal only public cards and values that seat is entitled to see. Include turn, phase, scores, and revision. Keep deck order, credentials, and other private card values out of responses.
+### Full snapshot for each seat
+
+Create, join, load or resume, poll, and authenticated command responses return a complete snapshot for the requesting seat. Each snapshot can render the current screen by itself. Use the same shape if push updates are added later.
+
+| Snapshot field | Contents |
+| --- | --- |
+| `protocolVersion`, `roomId`, `revision` | Wire compatibility, room instance identity, and a monotonically increasing room revision |
+| `roomCode`, `youSeatId`, `hostSeatId` | Invite code, requesting seat, and host |
+| `phase`, `round`, `turnSeatId` | Lobby, active round, round results, or game over, plus current turn when applicable |
+| `players`, `table` | Ordered seats, scores, card slots and visible values, deck count, and discard top |
+| `pendingMove`, `finalTurns`, `results` | Player-visible draw or power state, Cabo caller and remaining turns, and round or game results as applicable |
+| `availableActions` | Actions this seat can submit at this revision, including the choices each action accepts |
+
+Project the authoritative state into a distinct per-seat response type. Include hidden card slots with opaque references so clients can render card backs and select targets where allowed. Reveal only public values and values the requesting seat is entitled to see. Keep deck order, private card values, and seat credentials out of the snapshot. Action descriptors must also preserve hidden information. Send private snapshots with `Cache-Control: no-store`.
+
+Fetch on load or reconnect before enabling gameplay controls, then poll. Apply a snapshot as a replacement for the active room and seat. Ignore responses from previous sessions and snapshots older than the current revision. An equal revision can complete a refresh without resetting local selection. When the revision advances, retain a selection only if the new descriptor still permits it. Keep local pending feedback separate from game state.
+
+### Action catalog
+
+Use stable, tagged action kinds and typed parameters. Each descriptor carries any applicable choice sets, target references, count constraints, and required choices. Use the action kind plus the selected parameters to submit a command. The catalog describes game intent independently of button labels, layout, and input device.
+
+| Action kind | Choices supplied by the server |
+| --- | --- |
+| `startRound`, `nextRound`, `restartGame` | No parameters. Available only to the host in the applicable phase. |
+| `draw` | Currently available piles, such as `deck` or `discard`. |
+| `discardDrawn`, `useDrawnPower`, `callCabo` | No parameters. For a power, include the power kind visible to the acting player. |
+| `exchange` | Selectable own card slots, minimum and maximum selection counts, and valid insertion sides for a failed exchange when applicable. |
+| `peek` | Selectable own card slots. |
+| `spy` | Selectable opponent card slots grouped by seat. |
+| `swap` | Selectable own slots and opponent slots, with explicit pair constraints if needed. |
+
+Create room, join room, and resume session are entry flows outside the in-room catalog. A seat with no available commands receives an empty array. For an exchange, list selectable slots and count constraints without enumerating matching sets. The server resolves the outcome using hidden card values. Clients can choose their own presentation for waiting and unsupported actions. Unknown action kinds must never be submitted by an older client.
+
+### Command and response flow
+
+1. Submit a unique `commandId`, the snapshot's `expectedRevision`, an action kind, and its selected parameters. Authenticate with the private seat credential. The public room code locates the room.
+2. Within one serialized room update, authenticate the seat, check command replay, check the expected revision, then validate the command and parameters against current state. Commit the entire accepted mutation and advance the revision once.
+3. Return the command outcome alongside a fresh snapshot projected for that seat. Authenticated stale or illegal commands return a machine-readable rejection and the latest snapshot without changing state. A retry with the same command ID and payload returns the original outcome and a fresh snapshot without replaying the mutation. Reusing an ID with a different payload is rejected.
+
+### Frontend parity
+
+Keep canonical JSON fixtures for lobby, waiting, draw, each card power, round results, and game over when implementing the contract. Include asymmetric visibility fixtures for two seats at the same revision. Each frontend should verify that the fixture produces the same semantic controls and that selections encode the same command payloads. Also exercise direct load into an active game, an empty action list, an unknown action kind, and out-of-order snapshots. Native and browser frontends can use different layouts and gestures.
 
 ## Hosting
 

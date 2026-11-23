@@ -5,7 +5,8 @@ Read [SPEC.md](SPEC.md) before changing gameplay, hosting, or the client/server 
 - Put rendering, input, animation, and client-side interaction state in `app/`. Keep it buildable for `wasm32-unknown-unknown`.
 - Put HTTP, sessions, room lifecycle, randomness, state storage, and player-specific view construction in `server/`. Validate each command against current server state and authenticated seat.
 - Put deterministic rules, domain types, and public wire types in `shared/`. Keep it usable without Bevy, Axum, networking, or a runtime.
-- Avoid duplicating rules in UI systems or request handlers. Client checks may use only the facts available in that player's snapshot.
+- Render full seat-scoped snapshots and build gameplay controls from `availableActions`. Keep legality, visibility, and state transitions on the server. Use shared rule code to keep action enumeration and command validation aligned.
+- Treat snapshot and command JSON as the frontend compatibility contract. When implementing or changing it, update the spec and canonical fixtures so Bevy and native clients can verify the same actions and payloads.
 - Exercise changes with the narrowest relevant checks below. Add focused coverage for rule changes, turn ownership, redaction, and command replay when those behaviors change.
 - Update the spec when a contract or milestone changes. Mark unfinished behavior explicitly and report checks you could not run.
 
