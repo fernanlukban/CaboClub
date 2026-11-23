@@ -447,7 +447,13 @@ impl Room {
         if restart && command.test_generation != self.test.as_ref().map(|test| test.generation) {
             return Err("staleTest");
         }
-        if !restart && self.revision != command.expected_revision {
+        let test_preview = self.test.is_some()
+            && matches!(
+                command.action,
+                Action::RevealInitialCards | Action::ConfirmInitialLook
+            )
+            && command.expected_revision <= self.revision;
+        if !restart && !test_preview && self.revision != command.expected_revision {
             return Err("staleRevision");
         }
         if matches!(
