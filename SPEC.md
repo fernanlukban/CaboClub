@@ -98,8 +98,7 @@ Use stable, tagged action kinds and typed parameters. Each descriptor carries an
 | `discardHandCard` | One selectable existing hand slot to trade for the current incoming card. |
 | `callMatch` | Selectable own slots, minimum of two, maximum set by the current hand and game rules, and any required placement choice for a failed match. Offer before a draw if the discard top is available, or while resolving an incoming card. |
 | `peek` | Selectable own card slots. |
-| `spy` | Selectable opponent card slots grouped by seat. |
-| `swap` | Selectable own slots and opponent slots, with explicit pair constraints if needed. |
+| Spy and Swap | See [the tabletop power contract](TABLETOP_FLOWS.md#wire-contract-changes). |
 
 Create room, join room, and resume session are entry flows outside the in-room catalog. A seat with no available commands receives an empty array. For a match, list selectable slots and count constraints without enumerating matching sets. The server resolves the outcome using hidden card values. Clients can choose their own presentation for waiting and unsupported actions. Unknown action kinds must never be submitted by an older client.
 
@@ -125,7 +124,7 @@ Keep canonical JSON fixtures for lobby, waiting, draw, each card power, round re
 
 ## Tabletop mode
 
-See [Tabletop powers and TEST room](TABLETOP_FLOWS.md) for the proposed Spy and Swap interactions and bot testing flow.
+See [Tabletop powers and TEST room](TABLETOP_FLOWS.md) for the Spy and Swap interactions and bot testing flow.
 
 Tabletop mode is an optional way to play the same room. An iPad lying flat shows the shared table while each player uses a phone in landscape for their private hand. Players can use the regular client view alongside tabletop devices in the same game.
 
@@ -165,7 +164,7 @@ Use ease-in-out interpolation for camera zoom, camera translation, and card move
 
 ### Snapshot and permission boundary
 
-Use the same room and revision stream for both roles. Project a complete public board snapshot from the authoritative state on the server. The shared JSON envelope identifies the board role and has null values for seat-specific fields. The board receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes public board reads and `beginPlay` for a ready deal. Authorize deal commands only for the board session that created the room. Bind every board command to the current room, phase, and session. Require a player session for every other game command. Board command responses use the public projection.
+Use the same room and revision stream for both roles. Project a complete public board snapshot from the authoritative state on the server. The shared JSON envelope identifies the board role and has null values for seat-specific fields. The board receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes public board reads, `beginPlay` for a ready deal, and target staging for a pending Spy or Swap. Authorize deal commands only for the board session that created the room. Bind every board command to the current room, phase, and session. Test rooms also expose restart controls to their creating board. Require a player session for every other game command. Board command responses use the public projection.
 
 Keep the board route explicit when persisting the room URL and use distinct board and player sessions. The board projects card backs until ranks are public and uses the same seat position throughout the game. Phones still receive their normal complete seat snapshots. Landscape layout is a presentation choice. Any Bevy or native client can render the board or a player hand from the relevant role's snapshot.
 

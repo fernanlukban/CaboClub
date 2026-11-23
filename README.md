@@ -28,6 +28,8 @@ cargo run --locked -p cabo-server
 
 Open http://localhost:8080/tabletop on the tabletop device. Create a room and open its invite in two independent browser sessions. Once both players join, deal cards, have each player reveal and confirm any two cards, then start play from the board. For physical phones, use the deployed URL or the server machine's reachable LAN address instead of localhost.
 
+On staging, open **TEST room** from the tabletop home to try random bot play or a Spy or Swap drill. For a local TEST room, run the server with `CABO_TEST_ROOMS=1`.
+
 Rooms live in memory. A restart ends active games. Check `/health` for server readiness.
 
 ```sh

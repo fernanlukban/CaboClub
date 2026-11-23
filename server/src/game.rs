@@ -5,10 +5,13 @@ use std::{
 
 use cabo_shared::{
     game::{self, MAX_PLAYERS, MIN_PLAYERS, STARTING_HAND_SIZE, cabo_power::Power},
-    protocol::{Action, CardView, Choice, Command, PlayerView, RoundResult, Snapshot},
+    protocol::{
+        Action, CardView, Choice, Command, PendingPower, PlayerView, PowerResult, RoundResult,
+        Snapshot, TestScenario, TestView,
+    },
     round_start::{Phase as SetupPhase, Preview, RoundStart},
 };
-use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
@@ -33,6 +36,7 @@ struct Player {
     hand: Vec<Card>,
     score: u16,
     reset: bool,
+    bot: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +72,45 @@ struct Round {
 enum TurnStep {
     Awaiting,
     Incoming { card: Card, from_deck: bool },
-    Power(Power),
+    Peek,
+    SpySelecting(u64),
+    SpyReview(u64, u32),
+    SpyViewing(u64, usize, u8),
+    SwapSelectingOwn(u64),
+    SwapSelectingOpponent(u64, u32),
+    SwapReview(u64, u32, u32),
+}
+
+impl TurnStep {
+    fn power(self) -> Option<(u64, &'static str, Option<u32>, Option<u32>)> {
+        Some(match self {
+            Self::SpySelecting(id) => (id, "spySelecting", None, None),
+            Self::SpyReview(id, target) => (id, "spyReview", None, Some(target)),
+            Self::SpyViewing(id, ..) => (id, "spyViewing", None, None),
+            Self::SwapSelectingOwn(id) => (id, "swapSelectingOwn", None, None),
+            Self::SwapSelectingOpponent(id, own) => (id, "swapSelectingOpponent", Some(own), None),
+            Self::SwapReview(id, own, target) => (id, "swapReview", Some(own), Some(target)),
+            _ => return None,
+        })
+    }
+
+    fn accepts_target(self) -> bool {
+        matches!(
+            self,
+            Self::SpySelecting(_)
+                | Self::SpyReview(..)
+                | Self::SwapSelectingOpponent(..)
+                | Self::SwapReview(..)
+        )
+    }
+}
+
+struct TestRoom {
+    scenario: TestScenario,
+    seed: u64,
+    generation: u64,
+    rng: StdRng,
+    next_bot_move: Instant,
 }
 
 pub struct Room {
@@ -83,6 +125,9 @@ pub struct Room {
     round_number: u32,
     starter: usize,
     next_deal: u64,
+    next_power: u64,
+    swap_receipts: [Option<u64>; MAX_PLAYERS],
+    test: Option<TestRoom>,
     round: Option<Round>,
     cancel_backup: Option<(Round, Vec<Vec<Card>>)>,
     message: String,
@@ -105,12 +150,72 @@ impl Room {
             round_number: 0,
             starter: 0,
             next_deal: 1,
+            next_power: 1,
+            swap_receipts: [None; MAX_PLAYERS],
+            test: None,
             round: None,
             cancel_backup: None,
             last_active: Instant::now(),
             message: String::new(),
             replay: HashMap::new(),
             replay_order: VecDeque::new(),
+        }
+    }
+
+    pub fn enable_test(&mut self, scenario: TestScenario, seed: u64) {
+        self.test = Some(TestRoom {
+            scenario,
+            seed,
+            generation: 1,
+            rng: StdRng::seed_from_u64(seed),
+            next_bot_move: Instant::now(),
+        });
+    }
+
+    pub fn tick_bot(&mut self, now: Instant) {
+        if !self
+            .test
+            .as_ref()
+            .is_some_and(|test| now >= test.next_bot_move)
+        {
+            return;
+        }
+        let Some(round) = &self.round else { return };
+        let actor = match self.phase {
+            Phase::Setup => (1..self.players.len()).find(|&i| {
+                self.players[i].bot
+                    && round.opening.preview(self.players[i].id) != Some(Preview::Confirmed)
+            }),
+            Phase::Playing if self.players[round.turn].bot => Some(round.turn),
+            _ => None,
+        };
+        let Some(actor) = actor else { return };
+        let role = Role::Seat(actor);
+        let mut choices = self.actions(role);
+        if choices.is_empty() {
+            return;
+        }
+        let test = self.test.as_mut().unwrap();
+        let choice = choices.swap_remove(test.rng.random_range(0..choices.len()));
+        let mut slots = choice.slots;
+        if !matches!(choice.action, Action::ConfirmSpy | Action::ConfirmSwap) {
+            let count = test.rng.random_range(choice.min..=choice.max);
+            slots.shuffle(&mut test.rng);
+            slots.truncate(count);
+        }
+        let token = self.players[actor].token.clone();
+        let command = Command {
+            command_id: format!("bot-{}", self.revision),
+            expected_revision: self.revision,
+            deal_id: Some(round.id),
+            power_id: round.step.power().map(|p| p.0),
+            test_generation: None,
+            action: choice.action,
+            slots,
+            insert_left: test.rng.random(),
+        };
+        if self.command(&token, role, command).is_err() {
+            self.test.as_mut().unwrap().next_bot_move = now + Duration::from_millis(700);
         }
     }
 
@@ -134,7 +239,21 @@ impl Room {
             hand: vec![],
             score: 0,
             reset: false,
+            bot: false,
         });
+        if self.test.is_some() {
+            for index in 1..MAX_PLAYERS {
+                self.players.push(Player {
+                    id: index as u64 + 1,
+                    token: secret(),
+                    name: format!("Bot {index}"),
+                    hand: vec![],
+                    score: 0,
+                    reset: false,
+                    bot: true,
+                });
+            }
+        }
         self.changed("A player joined the table.");
         Ok(token)
     }
@@ -170,12 +289,23 @@ impl Room {
         self.revision += 1;
         self.last_active = Instant::now();
         self.message = message.into();
+        if let Some(test) = &mut self.test {
+            test.next_bot_move = Instant::now() + Duration::from_millis(680);
+        }
     }
 
     pub fn actions(&self, role: Role) -> Vec<Choice> {
         use Action::*;
         let mut choices = vec![];
         let host = role == Role::Seat(0);
+        if role == Role::CreatorBoard
+            && self.test.is_some()
+            && !self.players.is_empty()
+            && self.phase != Phase::Lobby
+        {
+            choices.push(Choice::button(RestartTest));
+            choices.push(Choice::button(RestartTestNewSeed));
+        }
         if host {
             choices.push(Choice::button(PairBoard));
             if self.board.is_some() || self.creator.is_some() {
@@ -214,21 +344,28 @@ impl Room {
             }
             return choices;
         }
-        let Role::Seat(index) = role else {
-            return choices;
-        };
-        if self.phase != Phase::Playing || round.turn != index {
+        if self.phase != Phase::Playing {
             return choices;
         }
+        let index = round.turn;
         let hand = &self.players[index];
         let opposing = || {
             self.players
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| *i != index)
-                .flat_map(|(_, p)| slots(p))
-                .collect::<Vec<_>>()
+                .flat_map(|(_, player)| slots(player))
+                .collect()
         };
+        if role != Role::Seat(index) {
+            if matches!(role, Role::Board | Role::CreatorBoard)
+                && !hand.bot
+                && round.step.accepts_target()
+            {
+                choices.push(Choice::select(StagePowerTarget, opposing(), 1, 1));
+            }
+            return choices;
+        }
         let match_cards = |choices: &mut Vec<Choice>| {
             if hand.hand.len() >= 2 {
                 let mut choice = Choice::select(CallMatch, slots(hand), 2, hand.hand.len());
@@ -266,13 +403,22 @@ impl Room {
                 }
                 match_cards(&mut choices);
             }
-            TurnStep::Power(Power::Peek) => choices.push(Choice::select(Peek, slots(hand), 1, 1)),
-            TurnStep::Power(Power::Spy) => choices.push(Choice::select(Spy, opposing(), 1, 1)),
-            TurnStep::Power(Power::Swap) => {
-                let mut choice = Choice::select(Swap, slots(hand), 2, 2);
-                choice.targets = opposing();
-                choices.push(choice);
+            TurnStep::Peek => choices.push(Choice::select(Peek, slots(hand), 1, 1)),
+            TurnStep::SpySelecting(_) => {}
+            TurnStep::SpyReview(_, target) => {
+                choices.push(Choice::select(ConfirmSpy, vec![target], 1, 1))
             }
+            TurnStep::SpyViewing(..) => choices.push(Choice::button(AcknowledgeSpy)),
+            TurnStep::SwapSelectingOwn(_) | TurnStep::SwapSelectingOpponent(..) => {
+                choices.push(Choice::select(SelectPowerOwnCard, slots(hand), 1, 1));
+            }
+            TurnStep::SwapReview(_, own, target) => {
+                choices.push(Choice::select(SelectPowerOwnCard, slots(hand), 1, 1));
+                choices.push(Choice::select(ConfirmSwap, vec![own, target], 2, 2));
+            }
+        }
+        if round.step.accepts_target() {
+            choices.push(Choice::select(StagePowerTarget, opposing(), 1, 1));
         }
         choices
     }
@@ -294,7 +440,14 @@ impl Room {
                 Err("commandIdReused")
             };
         }
-        if self.revision != command.expected_revision {
+        let restart = matches!(
+            command.action,
+            Action::RestartTest | Action::RestartTestNewSeed
+        );
+        if restart && command.test_generation != self.test.as_ref().map(|test| test.generation) {
+            return Err("staleTest");
+        }
+        if !restart && self.revision != command.expected_revision {
             return Err("staleRevision");
         }
         if matches!(
@@ -318,13 +471,25 @@ impl Room {
         {
             return Err("invalidSelection");
         }
-        let valid_slots = if command.action == Action::Swap {
-            choice.slots.contains(&command.slots[0]) && choice.targets.contains(&command.slots[1])
-        } else {
-            command.slots.iter().all(|id| choice.slots.contains(id))
-        };
-        if !valid_slots {
+        if !command.slots.iter().all(|id| choice.slots.contains(id))
+            || (command.action == Action::ConfirmSwap && command.slots != choice.slots)
+        {
             return Err("invalidSelection");
+        }
+        if matches!(
+            command.action,
+            Action::SelectPowerOwnCard
+                | Action::StagePowerTarget
+                | Action::ConfirmSpy
+                | Action::ConfirmSwap
+                | Action::AcknowledgeSpy
+        ) {
+            let round = self.round.as_ref().unwrap();
+            if command.deal_id != Some(round.id)
+                || command.power_id != round.step.power().map(|p| p.0)
+            {
+                return Err("stalePower");
+            }
         }
 
         let outcome = self.apply(role, &command)?;
@@ -421,7 +586,30 @@ impl Room {
                 self.phase = Phase::Playing;
                 "The round has started."
             }
-            _ => self.play(seat, command),
+            RestartTest | RestartTestNewSeed => {
+                let test = self.test.as_mut().unwrap();
+                test.generation += 1;
+                if command.action == RestartTestNewSeed {
+                    test.seed = rand::random();
+                }
+                test.rng = StdRng::seed_from_u64(test.seed);
+                self.round_number = 0;
+                self.starter = 0;
+                self.round = None;
+                self.cancel_backup = None;
+                self.swap_receipts.fill(None);
+                self.phase = Phase::Lobby;
+                for player in &mut self.players {
+                    player.hand.clear();
+                    player.score = 0;
+                    player.reset = false;
+                }
+                "Test restarted. Deal cards to begin."
+            }
+            _ => {
+                let actor = self.round.as_ref().unwrap().turn;
+                self.play(actor, command)
+            }
         };
         self.changed(message);
         Ok(message.into())
@@ -448,7 +636,12 @@ impl Room {
                 Card { slot, rank }
             })
             .collect();
-        deck.shuffle(&mut rand::rng());
+        if let Some(test) = &mut self.test {
+            deck.shuffle(&mut test.rng);
+        } else {
+            deck.shuffle(&mut rand::rng());
+        }
+        self.swap_receipts.fill(None);
         for p in &mut self.players {
             p.hand.clear();
         }
@@ -458,6 +651,30 @@ impl Room {
             }
         }
         let discard = vec![deck.pop().unwrap()];
+        if self.round_number == 0
+            && let Some(test) = &self.test
+        {
+            let rank = match test.scenario {
+                TestScenario::Spy => Some(9),
+                TestScenario::Swap => Some(11),
+                TestScenario::Random => None,
+            };
+            if let Some(rank) = rank {
+                if let Some(index) = deck.iter().position(|card| card.rank == rank) {
+                    let top = deck.len() - 1;
+                    deck.swap(index, top);
+                } else {
+                    let replacement = deck.last_mut().unwrap();
+                    let card = self
+                        .players
+                        .iter_mut()
+                        .flat_map(|p| &mut p.hand)
+                        .find(|card| card.rank == rank)
+                        .unwrap();
+                    std::mem::swap(replacement, card);
+                }
+            }
+        }
         let turn = if self.phase == Phase::Finished {
             0
         } else {
@@ -482,6 +699,7 @@ impl Room {
 
     fn play(&mut self, seat: usize, command: &Command) -> &'static str {
         use Action::*;
+        self.swap_receipts[seat] = None;
         let round = self.round.as_mut().unwrap();
         let incoming = match round.step {
             TurnStep::Incoming { card, .. } => Some(card),
@@ -559,10 +777,16 @@ impl Room {
             UseDrawnPower => {
                 let card = incoming.unwrap();
                 round.discard.push(card);
-                round.step = TurnStep::Power(game::card_power(card.rank).unwrap());
+                let id = self.next_power;
+                self.next_power += 1;
+                round.step = match game::card_power(card.rank).unwrap() {
+                    Power::Peek => TurnStep::Peek,
+                    Power::Spy => TurnStep::SpySelecting(id),
+                    Power::Swap => TurnStep::SwapSelectingOwn(id),
+                };
                 return "A player activated a power.";
             }
-            Peek | Spy => {
+            Peek => {
                 let card = *self
                     .players
                     .iter()
@@ -572,7 +796,44 @@ impl Room {
                 round.private_reveal = Some((seat, card));
                 "A player looked at a card."
             }
-            Swap => {
+            SelectPowerOwnCard => {
+                let id = round.step.power().unwrap().0;
+                round.step = TurnStep::SwapSelectingOpponent(id, command.slots[0]);
+                return "A player chose their card.";
+            }
+            StagePowerTarget => {
+                let target = command.slots[0];
+                round.step = match round.step {
+                    TurnStep::SpySelecting(id) | TurnStep::SpyReview(id, _) => {
+                        TurnStep::SpyReview(id, target)
+                    }
+                    TurnStep::SwapSelectingOpponent(id, own) | TurnStep::SwapReview(id, own, _) => {
+                        TurnStep::SwapReview(id, own, target)
+                    }
+                    _ => unreachable!(),
+                };
+                return "An opponent card was selected.";
+            }
+            ConfirmSpy => {
+                let (id, _, _, _) = round.step.power().unwrap();
+                let (owner, rank) = self
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, player)| {
+                        player
+                            .hand
+                            .iter()
+                            .find(|c| c.slot == command.slots[0])
+                            .map(|card| (i, card.rank))
+                    })
+                    .unwrap();
+                round.step = TurnStep::SpyViewing(id, owner, rank);
+                return "A player is finishing a private look.";
+            }
+            AcknowledgeSpy => "A player finished looking.",
+            ConfirmSwap => {
+                self.swap_receipts[seat] = Some(round.step.power().unwrap().0);
                 let own = self.players[seat]
                     .hand
                     .iter()
@@ -669,7 +930,7 @@ impl Room {
                 c.view(public || opening || power)
             }).collect();
             PlayerView { seat_id:p.id, name:p.name.clone(), score:p.score,
-                ready: self.phase == Phase::Setup && preview == Some(Preview::Confirmed), cards }
+                ready: self.phase == Phase::Setup && preview == Some(Preview::Confirmed), bot:p.bot, cards }
         }).collect();
         let incoming = round.and_then(|r| {
             if viewer != Some(r.turn) {
@@ -680,6 +941,43 @@ impl Room {
                 _ => None,
             }
         });
+        let pending_power = round.and_then(|round| {
+            let (power_id, phase, own_slot, target_slot) = round.step.power()?;
+            let is_actor = viewer == Some(round.turn);
+            Some(PendingPower {
+                power_id,
+                phase,
+                kind: if phase.starts_with("spy") {
+                    "spy"
+                } else {
+                    "swap"
+                },
+                actor_seat_id: self.players[round.turn].id,
+                own_slot: own_slot.filter(|_| is_actor),
+                target_slot: target_slot.filter(|_| is_actor || viewer.is_none()),
+            })
+        });
+        let private_power_result = round
+            .and_then(|round| match round.step {
+                TurnStep::SpyViewing(id, target, rank) if viewer == Some(round.turn) => {
+                    Some(PowerResult {
+                        result_id: id,
+                        kind: "spy",
+                        rank: Some(rank),
+                        target_name: Some(self.players[target].name.clone()),
+                    })
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                let id = self.swap_receipts[viewer?]?;
+                Some(PowerResult {
+                    result_id: id,
+                    kind: "swap",
+                    rank: None,
+                    target_name: None,
+                })
+            });
         let results = round
             .map(|r| {
                 r.results
@@ -733,6 +1031,13 @@ impl Room {
             deck_count: round.map_or(0, |r| r.deck.len()),
             discard_top: round.and_then(|r| r.discard.last()).map(|c| c.rank),
             incoming,
+            pending_power,
+            private_power_result,
+            test: self.test.as_ref().map(|test| TestView {
+                scenario: test.scenario,
+                seed: test.seed.to_string(),
+                generation: test.generation,
+            }),
             cabo_caller: round.and_then(|r| r.caller).map(|i| self.players[i].id),
             final_turns: round
                 .map(|r| r.final_turns.iter().map(|&i| self.players[i].id).collect())
@@ -765,6 +1070,11 @@ mod tests {
             slots,
             insert_left: false,
             deal_id: room.round.as_ref().map(|round| round.id),
+            test_generation: room.test.as_ref().map(|test| test.generation),
+            power_id: room
+                .round
+                .as_ref()
+                .and_then(|round| round.step.power().map(|p| p.0)),
         }
     }
 
@@ -839,6 +1149,146 @@ mod tests {
                 .cards
                 .iter()
                 .all(|card| card.rank.is_none())
+        );
+    }
+
+    #[test]
+    fn board_stages_spy_but_only_actor_reveals_and_acknowledges() {
+        let mut room = setup();
+        start(&mut room);
+        room.round.as_mut().unwrap().deck.last_mut().unwrap().rank = 9;
+        run(&mut room, Role::Seat(0), Action::DrawDeck, vec![]);
+        run(&mut room, Role::Seat(0), Action::UseDrawnPower, vec![]);
+        let target = room.players[1].hand[0];
+        let alternative = room.players[1].hand[1].slot;
+        let actor = room.players[0].token.clone();
+        let board = room.creator.clone().unwrap();
+        let racing = command(&room, "race", Action::StagePowerTarget, vec![alternative]);
+        run(
+            &mut room,
+            Role::CreatorBoard,
+            Action::StagePowerTarget,
+            vec![target.slot],
+        );
+        assert_eq!(
+            room.command(&actor, Role::Seat(0), racing),
+            Err("staleRevision")
+        );
+        let confirm = command(&room, "confirm", Action::ConfirmSpy, vec![target.slot]);
+        assert_eq!(
+            room.command(&board, Role::CreatorBoard, confirm.clone()),
+            Err("actionUnavailable")
+        );
+        room.command(&actor, Role::Seat(0), confirm.clone())
+            .unwrap();
+        assert_eq!(
+            room.snapshot(Role::Seat(0))
+                .private_power_result
+                .unwrap()
+                .rank,
+            Some(target.rank)
+        );
+        assert!(
+            room.snapshot(Role::CreatorBoard)
+                .private_power_result
+                .is_none()
+        );
+        assert!(room.snapshot(Role::Seat(1)).private_power_result.is_none());
+        assert!(room.actions(Role::CreatorBoard).is_empty());
+        assert_eq!(room.round.as_ref().unwrap().turn, 0);
+        run(&mut room, Role::Seat(0), Action::AcknowledgeSpy, vec![]);
+        room.command(&actor, Role::Seat(0), confirm).unwrap();
+        assert!(room.snapshot(Role::Seat(0)).private_power_result.is_none());
+        assert_eq!(room.round.as_ref().unwrap().turn, 1);
+    }
+
+    #[test]
+    fn swap_requires_current_pair_and_is_applied_once() {
+        let mut room = setup();
+        start(&mut room);
+        room.round.as_mut().unwrap().deck.last_mut().unwrap().rank = 11;
+        run(&mut room, Role::Seat(0), Action::DrawDeck, vec![]);
+        run(&mut room, Role::Seat(0), Action::UseDrawnPower, vec![]);
+        let own = room.players[0].hand[0].slot;
+        let target = room.players[1].hand[0].slot;
+        let actor = room.players[0].token.clone();
+        run(
+            &mut room,
+            Role::Seat(0),
+            Action::SelectPowerOwnCard,
+            vec![own],
+        );
+        run(
+            &mut room,
+            Role::CreatorBoard,
+            Action::StagePowerTarget,
+            vec![target],
+        );
+        let incorrect = command(&room, "reverse", Action::ConfirmSwap, vec![target, own]);
+        assert_eq!(
+            room.command(&actor, Role::Seat(0), incorrect),
+            Err("invalidSelection")
+        );
+        let confirm = command(&room, "swap", Action::ConfirmSwap, vec![own, target]);
+        room.command(&actor, Role::Seat(0), confirm.clone())
+            .unwrap();
+        room.command(&actor, Role::Seat(0), confirm).unwrap();
+        assert_eq!(room.players[0].hand[0].slot, target);
+        assert_eq!(room.players[1].hand[0].slot, own);
+        assert_eq!(
+            room.snapshot(Role::Seat(0))
+                .private_power_result
+                .unwrap()
+                .kind,
+            "swap"
+        );
+        assert!(
+            room.snapshot(Role::CreatorBoard)
+                .private_power_result
+                .is_none()
+        );
+        assert_eq!(room.round.as_ref().unwrap().turn, 1);
+    }
+
+    #[test]
+    fn bot_room_restarts_with_original_seed_and_sessions() {
+        let mut room = Room::new("BOTS".into(), true);
+        room.enable_test(TestScenario::Spy, 42);
+        let player = room.join("Avery").unwrap();
+        let board = room.creator.clone().unwrap();
+        assert_eq!(room.players.iter().filter(|player| player.bot).count(), 3);
+        run(&mut room, Role::CreatorBoard, Action::DealRound, vec![]);
+        let original: Vec<_> = room.players[0].hand.iter().map(|c| c.rank).collect();
+        assert_eq!(room.round.as_ref().unwrap().deck.last().unwrap().rank, 9);
+        for _ in 0..6 {
+            room.tick_bot(Instant::now() + Duration::from_secs(1));
+        }
+        assert!(
+            room.players[1..].iter().all(|bot| room
+                .round
+                .as_ref()
+                .unwrap()
+                .opening
+                .preview(bot.id)
+                == Some(Preview::Confirmed))
+        );
+        assert_eq!(
+            room.round.as_ref().unwrap().opening.preview(1),
+            Some(Preview::Hidden)
+        );
+        run(&mut room, Role::CreatorBoard, Action::RestartTest, vec![]);
+        room.tick_bot(Instant::now() + Duration::from_secs(1));
+        assert_eq!(room.role(&board), Some(Role::CreatorBoard));
+        assert_eq!(room.role(&player), Some(Role::Seat(0)));
+        assert_eq!(room.test.as_ref().unwrap().generation, 2);
+        run(&mut room, Role::CreatorBoard, Action::DealRound, vec![]);
+        assert_eq!(
+            room.players[0]
+                .hand
+                .iter()
+                .map(|c| c.rank)
+                .collect::<Vec<_>>(),
+            original
         );
     }
 

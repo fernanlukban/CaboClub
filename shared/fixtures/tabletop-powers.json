@@ -1,0 +1,43 @@
+{
+  "boardStaging": {
+    "role": "board",
+    "youSeatId": null,
+    "dealId": 2,
+    "revision": 18,
+    "pendingPower": {"powerId": 7, "actorSeatId": 1, "kind": "swap", "phase": "swapSelectingOpponent", "ownSlot": null, "targetSlot": null},
+    "privatePowerResult": null,
+    "availableActions": [{"action": "stagePowerTarget", "slots": [21, 22], "targets": [], "min": 1, "max": 1, "chooseSide": false}]
+  },
+  "phoneReview": {
+    "role": "player",
+    "youSeatId": 1,
+    "dealId": 2,
+    "revision": 19,
+    "pendingPower": {"powerId": 7, "actorSeatId": 1, "kind": "swap", "phase": "swapReview", "ownSlot": 11, "targetSlot": 21},
+    "privatePowerResult": null,
+    "availableActions": [
+      {"action": "selectPowerOwnCard", "slots": [11, 12], "targets": [], "min": 1, "max": 1, "chooseSide": false},
+      {"action": "confirmSwap", "slots": [11, 21], "targets": [], "min": 2, "max": 2, "chooseSide": false},
+      {"action": "stagePowerTarget", "slots": [21, 22], "targets": [], "min": 1, "max": 1, "chooseSide": false}
+    ]
+  },
+  "swapCommand": {"commandId": "swap-7", "expectedRevision": 19, "dealId": 2, "powerId": 7, "action": "confirmSwap", "slots": [11, 21]},
+  "spyViewingPhone": {
+    "role": "player",
+    "youSeatId": 1,
+    "dealId": 2,
+    "revision": 24,
+    "pendingPower": {"powerId": 8, "actorSeatId": 1, "kind": "spy", "phase": "spyViewing", "ownSlot": null, "targetSlot": null},
+    "privatePowerResult": {"resultId": 8, "kind": "spy", "rank": 7, "targetName": "Bea"},
+    "availableActions": [{"action": "acknowledgeSpy", "slots": [], "targets": [], "min": 0, "max": 0, "chooseSide": false}]
+  },
+  "spyViewingBoard": {
+    "role": "board",
+    "youSeatId": null,
+    "dealId": 2,
+    "revision": 24,
+    "pendingPower": {"powerId": 8, "actorSeatId": 1, "kind": "spy", "phase": "spyViewing", "ownSlot": null, "targetSlot": null},
+    "privatePowerResult": null,
+    "availableActions": []
+  }
+}

@@ -18,8 +18,13 @@ pub enum Action {
     CallCabo,
     UseDrawnPower,
     Peek,
-    Spy,
-    Swap,
+    SelectPowerOwnCard,
+    StagePowerTarget,
+    ConfirmSpy,
+    ConfirmSwap,
+    AcknowledgeSpy,
+    RestartTest,
+    RestartTestNewSeed,
     PairBoard,
     RevokeBoard,
 }
@@ -35,6 +40,8 @@ pub struct Command {
     #[serde(default)]
     pub insert_left: bool,
     pub deal_id: Option<u64>,
+    pub power_id: Option<u64>,
+    pub test_generation: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -84,6 +91,7 @@ pub struct PlayerView {
     pub name: String,
     pub score: u16,
     pub ready: bool,
+    pub bot: bool,
     pub cards: Vec<CardView>,
 }
 
@@ -93,6 +101,42 @@ pub struct RoundResult {
     pub seat_id: u64,
     pub hand_total: u16,
     pub points: u16,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TestScenario {
+    Random,
+    Spy,
+    Swap,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestView {
+    pub scenario: TestScenario,
+    pub seed: String,
+    pub generation: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPower {
+    pub power_id: u64,
+    pub actor_seat_id: u64,
+    pub kind: &'static str,
+    pub phase: &'static str,
+    pub own_slot: Option<u32>,
+    pub target_slot: Option<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerResult {
+    pub result_id: u64,
+    pub kind: &'static str,
+    pub rank: Option<u8>,
+    pub target_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -113,6 +157,9 @@ pub struct Snapshot {
     pub deck_count: usize,
     pub discard_top: Option<u8>,
     pub incoming: Option<CardView>,
+    pub pending_power: Option<PendingPower>,
+    pub private_power_result: Option<PowerResult>,
+    pub test: Option<TestView>,
     pub cabo_caller: Option<u64>,
     pub final_turns: Vec<u64>,
     pub results: Vec<RoundResult>,

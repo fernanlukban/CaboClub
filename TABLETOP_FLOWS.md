@@ -1,6 +1,6 @@
 # Tabletop powers and TEST room
 
-Proposed product and implementation spec for [Cabo Club](SPEC.md). Today a phone submits Spy or Swap directly, and the board displays public cards. This spec adds shared targeting and a bot room.
+Product and protocol spec for [Cabo Club](SPEC.md). Spy and Swap use shared targeting, and staging includes a TEST room with bots.
 
 ## Device flows
 
@@ -39,7 +39,7 @@ Reconnect renders the current phase directly. A player who reconnects during `sp
 
 ## Wire contract changes
 
-Keep complete snapshots for both roles. Add the following fields and descriptors as an additive change to the current protocol. Existing clients can ignore unknown actions.
+Keep complete snapshots for both roles. [Wire fixtures](shared/fixtures/tabletop-powers.json) show the power-related fields for each device; snapshots also include the ordinary room state. Add the following fields and descriptors as an additive change to the current protocol. Existing clients can ignore unknown actions.
 
 | Contract | Shape and visibility |
 | --- | --- |
@@ -51,7 +51,7 @@ Keep complete snapshots for both roles. Add the following fields and descriptors
 | `acknowledgeSpy` | Actor only during `spyViewing`. |
 | Command envelope | Keep `commandId`, `dealId`, and `expectedRevision`. Add `powerId` for each power command and use the existing slot reference list. |
 
-During rollout, keep the current phone endpoint behavior until the new client and server agree on the new power contract. Once both ship, route all power resolution through the state machine so the old direct action cannot bypass confirmation.
+The client and server ship together. All power resolution goes through the state machine.
 
 ## TEST room
 
@@ -65,7 +65,7 @@ Put a **TEST room** entry on staging tabletop home. A board session creates a fr
 
 Bots acknowledge their initial previews automatically. On their turns, they choose from server-provided actions and valid selections using only their own player view. A bot can make an incorrect match. Bots never consult hidden ranks to pick moves or wait for input from the iPad. They also acknowledge private Spy looks. Pause briefly before each bot move so the board shows the sequence. Schedule at most one bot command at a time. Recheck room generation, revision, actor, and available actions after the delay and drop stale work. Bot moves pass through the same authorization and transition logic as human moves.
 
-**Restart test** on the board recreates the selected scenario inside the existing room. Keep the board and human session, reset the round and scores, increment the room generation, and cancel pending bot work. Retain the selected seed unless the tester requests a new one. Keep room limits and expiry in force. Hide the TEST entry and reject test-only creation on environments where it is disabled.
+**Restart test** on the board recreates the selected scenario inside the existing room. Keep the board and human session, reset the round and scores, increment the room generation, and cancel pending bot work. Restart checks the test generation so bot turns cannot invalidate the reset request and an old request cannot reset a newer run. Retain the selected seed for **Restart test**. **Restart with new seed** is available for a fresh run. Keep room limits and expiry in force. Hide the TEST entry and reject test-only creation on environments where it is disabled.
 
 ## Acceptance checks
 

@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use cabo_shared::protocol::{Command, Snapshot};
+use cabo_shared::protocol::{Command, Snapshot, TestScenario};
 use game::{Room, secret};
 use qrcode::{QrCode, render::svg};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,8 @@ type Rooms = Arc<Mutex<HashMap<String, Room>>>;
 struct Create {
     board: bool,
     name: Option<String>,
+    test_scenario: Option<TestScenario>,
+    seed: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +87,21 @@ fn room_mut<'a>(
     Ok(room)
 }
 
+fn test_rooms_enabled() -> bool {
+    env::var("CABO_TEST_ROOMS").map_or_else(
+        |_| env::var("RAILWAY_ENVIRONMENT_NAME").is_ok_and(|value| value == "staging"),
+        |value| value == "1",
+    )
+}
+
+async fn capabilities() -> Json<[&'static str; 1]> {
+    Json([if test_rooms_enabled() {
+        "testRooms"
+    } else {
+        ""
+    }])
+}
+
 async fn create(
     State(state): State<Rooms>,
     Json(input): Json<Create>,
@@ -101,6 +118,19 @@ async fn create(
         }
     };
     let mut room = Room::new(code.clone(), input.board);
+    if let Some(scenario) = input.test_scenario {
+        if !input.board || !test_rooms_enabled() {
+            return Err(bad(StatusCode::FORBIDDEN, "testRoomsDisabled"));
+        }
+        let seed = input
+            .seed
+            .filter(|value| !value.is_empty())
+            .map(|value| value.parse::<u64>())
+            .transpose()
+            .map_err(|_| bad(StatusCode::BAD_REQUEST, "invalidSeed"))?
+            .unwrap_or_else(rand::random);
+        room.enable_test(scenario, seed);
+    }
     let token = if input.board {
         room.creator_token().unwrap().to_owned()
     } else {
@@ -209,7 +239,23 @@ async fn qr(axum::extract::Query(query): axum::extract::Query<Qr>) -> Result<Res
 async fn main() -> Result<(), Box<dyn Error>> {
     let port: u16 = env::var("PORT").unwrap_or_else(|_| "8080".into()).parse()?;
     let app_dir = env::var("CABO_APP_DIR").unwrap_or_else(|_| "app/dist".into());
+    let rooms = Rooms::default();
+    let bot_rooms = rooms.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(200));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let now = Instant::now();
+            for room in bot_rooms.lock().await.values_mut() {
+                if now.saturating_duration_since(room.last_active) < Duration::from_secs(8 * 3600) {
+                    room.tick_bot(now);
+                }
+            }
+        }
+    });
     let api = Router::new()
+        .route("/capabilities", get(capabilities))
         .route("/rooms", post(create))
         .route("/rooms/{code}", get(snapshot))
         .route("/rooms/{code}/join", post(join))
@@ -225,7 +271,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 response
             },
         ))
-        .with_state(Rooms::default());
+        .with_state(rooms);
     let app_shell = std::path::Path::new(&app_dir).join("index.html");
     let app = Router::new()
         .route_service("/tabletop", ServeFile::new(&app_shell))

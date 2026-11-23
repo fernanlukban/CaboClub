@@ -23,7 +23,8 @@ let session = readSession(key);
 if (room && session?.room !== room) session = null;
 let snapshot;
 let selection = [];
-let target;
+let testRoomsEnabled = false;
+let dismissedSwap;
 let busy = false;
 let polling = false;
 let page = query.has("room") ? "join" : "home";
@@ -32,13 +33,16 @@ let pairing = "";
 let insertLeft = false;
 let tableControlsOpen = false;
 let moveAnimation;
+let animateTabletopSwap = false;
 
 const labels = {
   dealRound:"Deal cards",dealNextRound:"Deal next round",dealNewGame:"New game",
   cancelSetup:"Cancel deal",revealInitialCards:"Reveal 2",confirmInitialLook:"I’ve looked",
   beginPlay:"Start game",drawDeck:"Draw from deck",drawDiscard:"Take discard",
   discardDrawn:"Discard drawn card",discardHandCard:"Discard selected card",callMatch:"Call match",
-  callCabo:"Call Cabo",useDrawnPower:"Use card power",peek:"Peek",spy:"Spy",swap:"Swap",
+  callCabo:"Call Cabo",useDrawnPower:"Use card power",peek:"Peek",
+  confirmSpy:"Confirm Spy",confirmSwap:"Confirm Swap",acknowledgeSpy:"Done",
+  restartTest:"Restart test",restartTestNewSeed:"Restart with new seed",
   pairBoard:"Pair a board",revokeBoard:"Revoke board access",
 };
 const errors = {
@@ -46,6 +50,10 @@ const errors = {
   invalidName:"Enter a name with 1 to 22 characters.",roomUnavailable:"This room is full or already playing.",
   invalidPairing:"That board pairing code has expired or is incorrect.",roomNotFound:"This room has expired or does not exist.",
   invalidSession:"Your session ended. Join again to continue.",actionUnavailable:"That move is unavailable now.",
+  staleTest:"This test was already restarted.",
+  stalePower:"That power has changed. Check the current selection.",
+  invalidSeed:"Enter a whole-number seed between 0 and 18446744073709551615.",
+  testRoomsDisabled:"Test rooms are unavailable here.",
   roomCapacity:"The server is full. Try creating a table later.",
 };
 
@@ -90,11 +98,11 @@ function accept(next, force = false, renderNow = true) {
     return;
   }
   if (!force && snapshot && next.roomId === snapshot.roomId && next.revision <= snapshot.revision) return;
-  if (snapshot && snapshot.dealId !== next.dealId) { selection = []; target = undefined; }
-  const currentTargets = new Set(next.availableActions.flatMap(action => action.targets));
+  if (snapshot && snapshot.dealId !== next.dealId) { selection = []; }
   const allowed = selectable(next);
   selection = selection.filter(slot => allowed.has(slot));
-  if (target !== undefined && !currentTargets.has(target) && !allowed.has(target)) target = undefined;
+  animateTabletopSwap = mode==="board" && snapshot?.pendingPower?.phase==="swapReview"
+    && !next.pendingPower && snapshot.dealId===next.dealId;
   snapshot = next;
   if (renderNow) render();
 }
@@ -135,16 +143,18 @@ async function poll() {
     if (session === active) { connection.textContent = "Reconnecting…"; connection.hidden = false; }
   } finally { polling = false; }
 }
-async function submit(choice) {
+async function submit(choice, explicitSlots) {
   if (!choice || busy || !snapshot) return;
   const active = session;
-  const slots = choice.action === "swap" ? [selection[0], target] : choice.action === "spy" ? [target] : choice.max ? selection.slice() : [];
+  const slots = explicitSlots ?? (choice.max ? selection.slice() : []);
   if (slots.length < choice.min || slots.length > choice.max || slots.includes(undefined)) return;
   busy = true;
   render();
   const data = {
     commandId:globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36),
     expectedRevision:snapshot.revision, action:choice.action, slots, insertLeft, dealId:snapshot.dealId,
+    powerId:snapshot.pendingPower?.powerId ?? null,
+    testGeneration:snapshot.test?.generation ?? null,
   };
   try {
     let result;
@@ -160,14 +170,13 @@ async function submit(choice) {
         moveAnimation = { action:choice.action, slots };
       if (choice.action === "revokeBoard") pairing = "";
       selection = [];
-      target = undefined;
     } else notice = errors[body.detail] || "That action could not be applied.";
     if (body.snapshot) accept(body.snapshot, false, false);
   } catch { notice = "Connection lost. Check the table before trying again."; }
   finally { busy = false; render(); }
 }
 function leave(message = "") {
-  save(null); snapshot = undefined; selection = []; target = undefined; pairing = ""; tableControlsOpen = false; notice = message;
+  save(null); snapshot = undefined; selection = []; pairing = ""; tableControlsOpen = false; notice = message;
   page = "home";
   const url = new URL(location.href);
   url.searchParams.delete("room");
@@ -182,7 +191,23 @@ function home() {
   if (page === "home") {
     return node("section",{class:"home"},brand,node("p",{},mode === "board"?"The shared table":"Private tables for two to four players"),
       node("div",{class:"home-nav"},button("Join a game",()=>navigate("join")),button("Create a new game",()=>mode==="board"?connect("/api/rooms",{board:true}):navigate("create"),true)),
-      mode==="player"?node("a",{href:tabletopPath},"Open tabletop mode"):null,notice?node("p",{role:"status"},notice):null);
+      mode==="player"?node("a",{href:tabletopPath},"Open tabletop mode"):null,
+      mode==="board"&&testRoomsEnabled?button("TEST room",()=>navigate("test")):null,notice?node("p",{role:"status"},notice):null);
+  }
+  if (page === "test") {
+    const form = node("form",{submit:event=>{
+      event.preventDefault();
+      const data = new FormData(event.currentTarget);
+      connect("/api/rooms",{board:true,testScenario:data.get("scenario"),seed:data.get("seed").trim()});
+    }},
+    node("label",{},"Scenario",node("select",{name:"scenario"},
+      node("option",{value:"random"},"Random play"),
+      node("option",{value:"spy"},"Spy drill"),
+      node("option",{value:"swap"},"Swap drill"))),
+    node("label",{},"Seed (optional)",node("input",{name:"seed",inputmode:"numeric",maxlength:"20"})),
+    node("button",{type:"submit",class:"primary",disabled:busy},"Create TEST room"));
+    return node("section",{class:"home"},brand,node("h2",{},"TEST room"),form,
+      notice?node("p",{role:"status"},notice):null,button("Back",()=>navigate("home")));
   }
   const creating = page === "create";
   const form = node("form",{submit:event=>{
@@ -206,9 +231,9 @@ function top(showTableControls = false) {
 function card(view, index = 0, action, selected = false, name) {
   const rank = view?.rank;
   const face = rank !== null && rank !== undefined;
-  const props = mode==="board" ? { role:"img" } :
+  const props = mode==="board" && !action ? { role:"img" } :
     { type:"button", "aria-pressed":String(selected), disabled:!action || busy, click:action ?? (()=>{}) };
-  return node(mode==="board"?"div":"button",{
+  return node(mode==="board"&&!action?"div":"button",{
     ...props,class:`card ${face?"face":""} ${selected?"selected":""} ${view?"":"empty"}`,
     "aria-label": name || `Card ${index+1}${face?", rank "+rank:", face down"}`,
     style:`--index:${index}`,
@@ -244,22 +269,27 @@ function status() {
 function toggle(slot) {
   if (selection.includes(slot)) selection = selection.filter(id=>id!==slot);
   else {
-    const limit = Math.max(...snapshot.availableActions.filter(action=>action.slots.includes(slot)&&action.action!=="spy").map(action=>action.action==="swap"?1:action.max),1);
+    const limit = Math.max(...snapshot.availableActions.filter(action=>action.slots.includes(slot)&&action.action!=="spy").map(action=>action.max),1);
     selection = limit===1 ? [slot] : selection.length<limit ? [...selection,slot] : selection;
   }
   render();
 }
 function actionStrip(filter = () => true) {
-  const visible = snapshot.availableActions.filter(filter);
+  const visible = snapshot.availableActions.filter(choice=>filter(choice)
+    && !["stagePowerTarget","selectPowerOwnCard","acknowledgeSpy"].includes(choice.action));
+  if (!visible.length) return null;
   return node("div",{class:"actions"},...visible.map(choice=>{
     let label = labels[choice.action];
     if (choice.action==="beginPlay" && snapshot.round>1) label="Start round";
-    const count = choice.action==="swap" ? selection.length + Number(target!==undefined) :
-      choice.action==="spy" ? Number(target!==undefined) : selection.length;
-    const valid = !choice.max || (count>=choice.min && count<=choice.max &&
-      (choice.action==="spy" || selection.every(id=>choice.slots.includes(id))) &&
-      (choice.action!=="swap" || choice.targets.includes(target)));
-    return button(label,()=>submit(choice),choice.action!=="pairBoard"&&choice.action!=="revokeBoard",busy||!valid);
+    if (choice.action==="useDrawnPower") {
+      const rank = snapshot.incoming?.rank;
+      label = rank>=11?"Use Swap":rank>=9?"Use Spy":"Use Peek";
+    }
+    const staged = ["confirmSpy","confirmSwap"].includes(choice.action);
+    const valid = staged || !choice.max || (selection.length>=choice.min && selection.length<=choice.max
+      && selection.every(id=>choice.slots.includes(id)));
+    return button(label,()=>submit(choice,staged?choice.slots:undefined),
+      choice.action!=="pairBoard"&&choice.action!=="revokeBoard",busy||!valid);
   }),visible.some(action=>action.chooseSide)&&selection.length>=2
     ?button(insertLeft?"Keep failed draw on left":"Keep failed draw on right",()=>{insertLeft=!insertLeft;render();}):null);
 }
@@ -273,7 +303,43 @@ function summary(showCards = false) {
 }
 const directions = ["south", "north", "west", "east"];
 
+function powerPrompt() {
+  const pending = snapshot.pendingPower;
+  if (!pending) return null;
+  const actor = snapshot.players.find(player=>player.seatId===pending.actorSeatId)?.name;
+  const mine = snapshot.youSeatId===pending.actorSeatId;
+  switch (pending.phase) {
+    case "swapSelectingOwn": return mine?"Choose a card to give":`Waiting for ${actor} to choose their card`;
+    case "spySelecting":
+    case "swapSelectingOpponent": return mine?"Choose an opponent card":`${actor} is choosing an opponent card`;
+    case "spyReview":
+    case "swapReview": return mine?"Review the selected cards":`Waiting for ${actor} to confirm`;
+    case "spyViewing": return mine?"Finish your private look":`${actor} is finishing their turn`;
+    default: return null;
+  }
+}
+
+function powerToast() {
+  const result = snapshot.privatePowerResult;
+  if (!result) return null;
+  if (result.kind==="spy") {
+    const done = snapshot.availableActions.find(choice=>choice.action==="acknowledgeSpy");
+    return node("aside",{class:"power-toast",role:"status"},
+      `Spy confirmed · ${result.targetName}’s card is ${result.rank}`,
+      done?button("Done",()=>submit(done),true,busy):null);
+  }
+  const receipt = `${snapshot.roomId}:${result.resultId}`;
+  if (dismissedSwap===receipt || sessionStorage.getItem("cabo-dismissed-swap")===receipt) return null;
+  return node("aside",{class:"power-toast",role:"status"},"Swap complete",
+    button("Dismiss",()=>{
+      dismissedSwap = receipt;
+      sessionStorage.setItem("cabo-dismissed-swap",receipt);
+      render();
+    }));
+}
+
 function tabletop(center) {
+  const targetChoice = snapshot.availableActions.find(choice=>choice.action==="stagePowerTarget");
   return node("div",{class:"tabletop"},...directions.map((direction,index)=>{
     const player = snapshot.players[index];
     const ready = ["initialPreview","readyToStart"].includes(snapshot.phase);
@@ -289,7 +355,10 @@ function tabletop(center) {
       node("strong",{},player?.name ?? "Open seat"),
       description?node("small",{},description):null,
       player?.cards.length?node("div",{class:"tabletop-hand"},
-        ...player.cards.map((item,index)=>card(item,index))):null);
+        ...player.cards.map((item,index)=>card(item,index,
+          targetChoice?.slots.includes(item.slot)?()=>submit(targetChoice,[item.slot]):null,
+          snapshot.pendingPower?.targetSlot===item.slot,
+          `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}`))):null);
   }),node("div",{class:"tabletop-center"},center));
 }
 
@@ -309,6 +378,8 @@ function lobbyOrBoard() {
   if (mode==="board") {
     return node("section",{class:"board tabletop-view"},node("h2",{},heading),
       tabletop(lobby?invite:piles()),
+      snapshot.test?node("p",{class:"status"},`TEST room · ${snapshot.test.scenario} · Seed ${snapshot.test.seed}`):null,
+      powerPrompt()?node("p",{class:"status",role:"status"},powerPrompt()):null,
       winner?node("p",{},`Winner: ${winner}`):null,
       snapshot.caboCaller?node("p",{},`Cabo · ${snapshot.finalTurns.length} final turns remaining`):null,
       snapshot.availableActions.length?actionStrip():null,
@@ -318,7 +389,7 @@ function lobbyOrBoard() {
     summary(results),winner?node("p",{},`Winner: ${winner}`):null,
     !lobby&&!results?piles():null,
     snapshot.caboCaller?node("p",{},`Cabo · ${snapshot.finalTurns.length} final turns remaining`):null,
-    actionStrip(),pairing?node("p",{},`Board pairing code: ${pairing}`):null,
+    actionStrip(),powerToast(),pairing?node("p",{},`Board pairing code: ${pairing}`):null,
     notice?node("p",{role:"status"},notice):null);
 }
 function phone() {
@@ -329,22 +400,26 @@ function phone() {
   const rows = hand.length>8?Math.ceil(hand.length/8):1;
   const cols = Math.max(1,Math.ceil(hand.length/rows));
   const size = active?`${Math.min(21,38/rows)}dvh`:`${Math.min(36,57/rows)}dvh`;
-  const spy = snapshot.availableActions.find(action=>action.action==="spy"||action.action==="swap");
-  const targets = spy ? new Set(spy.action==="spy"?spy.slots:spy.targets):new Set();
+  const ownChoice = snapshot.availableActions.find(action=>action.action==="selectPowerOwnCard");
+  const targetChoice = snapshot.availableActions.find(action=>action.action==="stagePowerTarget");
+  const targets = new Set(targetChoice?.slots ?? []);
+  const privateResult = powerToast();
   const opening = snapshot.availableActions.some(action=>action.action==="revealInitialCards");
-  const prompt = opening?`Choose two cards · ${selection.length} of 2`:snapshot.availableActions.some(action=>action.action==="confirmInitialLook")?"Remember these two cards":status();
+  const prompt = opening?`Choose two cards · ${selection.length} of 2`:snapshot.availableActions.some(action=>action.action==="confirmInitialLook")?"Remember these two cards":powerPrompt() || status();
   const playingActions = new Set(["pairBoard","revokeBoard"]);
   const tableActions = snapshot.availableActions.some(choice=>playingActions.has(choice.action));
   const viewed = !active ? snapshot.players.filter(player=>player.seatId!==me.seatId).flatMap(player=>
     player.cards.flatMap((view,index)=>view.rank===null?[]:[`${player.name} · Card ${index+1} · ${view.rank}`])) : [];
   return node("section",{class:`phone ${active?"active":""}`},top(tableActions),
     node("div",{class:"stage"},piles(active),
-      node("div",{class:"hand",style:`--cols:${cols};--size:${size}`},...hand.map((item,index)=>card(item,index,selectableSlots.has(item.slot)?()=>toggle(item.slot):null,selection.includes(item.slot)))),
+      node("div",{class:"hand",style:`--cols:${cols};--size:${size}`},...hand.map((item,index)=>card(item,index,ownChoice?.slots.includes(item.slot)?()=>submit(ownChoice,[item.slot]):
+        !snapshot.pendingPower&&selectableSlots.has(item.slot)?()=>toggle(item.slot):null,
+        snapshot.pendingPower?.ownSlot===item.slot||selection.includes(item.slot)))),
       targets.size?node("div",{class:"targets"},...snapshot.players.filter(p=>p.seatId!==me.seatId).flatMap(p=>
-        p.cards.map((item,index)=>targets.has(item.slot)?button(`${p.name} · Card ${index+1}`,()=>{target=item.slot;render();},target===item.slot):null))):null),
+        p.cards.map((item,index)=>targets.has(item.slot)?button(`${p.name} · Card ${index+1}`,()=>submit(targetChoice,[item.slot]),snapshot.pendingPower?.targetSlot===item.slot,busy):null))):null),
     node("footer",{},node("p",{class:"status",role:"status"},notice||prompt),
       actionStrip(choice=>!playingActions.has(choice.action)),
-      ...viewed.map(label=>node("p",{class:"status"},label))),
+      ...viewed.map(label=>node("p",{class:"status"},label)),privateResult),
     tableActions&&tableControlsOpen?node("aside",{class:"table-controls"},actionStrip(choice=>playingActions.has(choice.action)),
       pairing?node("p",{},`Board pairing code: ${pairing}`):null):null);
 }
@@ -401,9 +476,25 @@ function render() {
     if (next.querySelector(".table-controls")) previous.append(next.querySelector(".table-controls"));
     animateMove(previousStage, previousCards, previousPiles, moveAnimation);
   } else {
+    const previousCards = animateTabletopSwap && !matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? new Map([...root.querySelectorAll(".tabletop-hand .card")].map(card=>[card.dataset.sprite,card.getBoundingClientRect()]))
+      : null;
     root.replaceChildren(snapshot?(usePhone?phone():node("div",{},top(),lobbyOrBoard())):home());
     surface = usePhone?"phone":"other";
+    if (previousCards) {
+      for (const card of root.querySelectorAll(".tabletop-hand .card")) {
+        const previous = previousCards.get(card.dataset.sprite);
+        if (!previous) continue;
+        const current = card.getBoundingClientRect();
+        const x = previous.left - current.left;
+        const y = previous.top - current.top;
+        if (Math.hypot(x,y)>8) card.animate([
+          {transform:`translate(${x}px,${y}px)`}, {transform:"translate(0,0)"},
+        ],{duration:390,easing:"ease-in-out"});
+      }
+    }
   }
+  animateTabletopSwap = false;
   moveAnimation = undefined;
 }
 render();
@@ -411,3 +502,12 @@ poll();
 setInterval(poll, 1100);
 
 window.addEventListener("pageshow", event => { if (event.persisted) { snapshot = undefined; render(); poll(); } });
+
+if (mode==="board") {
+  request("/api/capabilities",undefined,null).then(([response, data])=>{
+    if (response.ok && data.includes("testRooms")) {
+      testRoomsEnabled = true;
+      if (!session && page==="home") render();
+    }
+  }).catch(()=>{});
+}
