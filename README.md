@@ -1,19 +1,28 @@
 # Cabo Club
 
-A Rust and Bevy browser starter with an interactive demo table. Gameplay, room management, and scoring from the production app still need to be ported.
+Cabo Club is a Rust web app for playing Cabo with friends. The Bevy browser demo and Axum hosting scaffold are in place. See [SPEC.md](SPEC.md) for the multiplayer milestones.
 
-## Run locally
+| Crate | Responsibility |
+| --- | --- |
+| `app/` | Bevy WebAssembly client |
+| `server/` | Axum HTTP server, static hosting, and future room and session management |
+| `shared/` | Pure Rust game and protocol code for both targets |
 
-Install Rust and Trunk, then run:
+## Develop locally
+
+Install Rust with the WebAssembly target and Trunk:
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install trunk --locked --version 0.21.14
-trunk serve
 ```
 
-Open http://localhost:8080 and click the table or press Space to flip the demo cards.
+For a fast client preview, run `cd app && trunk serve`. For same-origin hosting, run `(cd app && trunk build)` from the repository root, then run `cargo run -p cabo-server` and open http://localhost:8080. Check `/health` for server readiness.
 
-## Deploy to Railway
+```sh
+cargo fmt --all -- --check
+cargo test -p cabo-shared -p cabo-server
+cargo check -p cabo-app --target wasm32-unknown-unknown
+```
 
-Add this repository and the `staging` branch as a GitHub service in the staging environment. Railway uses the Dockerfile to build the WebAssembly client and serve it through nginx. The service listens on Railway's `PORT` and provides a health check at `/health`.
+Railway builds the root Dockerfile from the `staging` branch. The container serves the client and API from a single service and listens on Railway's `PORT`.

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use cabo_shared::game::STARTING_HAND_SIZE;
 
 #[derive(Component)]
 struct DemoCard;
@@ -22,7 +23,8 @@ fn main() {
 
 fn setup(mut commands: Commands) {
     commands.spawn(Camera2d);
-    for x in [-96.0, -32.0, 32.0, 96.0] {
+    for index in 0..STARTING_HAND_SIZE {
+        let x = (index as f32 - (STARTING_HAND_SIZE - 1) as f32 / 2.0) * 64.0;
         commands.spawn((
             DemoCard,
             Sprite::from_color(Color::srgb(0.22, 0.49, 0.41), Vec2::new(52.0, 76.0)),
