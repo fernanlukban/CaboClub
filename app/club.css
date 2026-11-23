@@ -1,0 +1,66 @@
+:root{color-scheme:dark;--felt:#102d28;--ink:#f7ecd2;--muted:#a7b9a6;--gold:#dfb77a;--edge:#829d8059;--ease:cubic-bezier(.45,0,.55,1);font:16px system-ui,sans-serif;color:var(--ink);background:var(--felt)}
+*{box-sizing:border-box}
+body{margin:0;min-height:100dvh;background:radial-gradient(ellipse at 50% 35%,#315b45 0%,#17392f 57%,#0d2420 100%)}
+#scene{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+#table{width:100%;height:100%;display:block}
+main{position:relative;max-width:75rem;margin:auto;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+h1,h2{font-family:Georgia,serif;font-weight:400;line-height:1.04;margin:0}
+h1{font-size:clamp(3.2rem,12vmin,7rem);letter-spacing:-.065em}
+h2{font-size:clamp(1.65rem,6vmin,3.7rem);letter-spacing:-.04em}
+p{margin:.45rem 0;color:var(--muted)}
+button,input,select{font:inherit}
+button{border:1px solid var(--edge);border-radius:7px;background:#16362c;color:var(--ink);min-height:44px;padding:.6rem 1rem;cursor:pointer}
+button.primary{background:var(--gold);border-color:var(--gold);color:#20241a;font-weight:750}
+button:disabled{cursor:default;opacity:.45}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #f5cd80;outline-offset:3px}
+a{color:var(--gold)}
+[hidden]{display:none!important}
+.home{display:grid;place-content:center;min-height:calc(100dvh - 32px);width:min(100%,38rem);margin:auto;gap:1.1rem;text-align:center}
+.home form{display:grid;gap:.75rem;text-align:left}
+.home label{display:grid;gap:.35rem}
+input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:var(--ink);padding:.8rem;min-height:44px}
+.home-nav,.actions,.piles,.seats{display:flex;justify-content:center;gap:.5rem;flex-wrap:wrap;align-items:center}
+.home-nav button{flex:1;min-width:8rem}
+.top{display:flex;gap:.8rem;align-items:center;justify-content:space-between}
+.brand{font:1.35rem Georgia,serif;letter-spacing:-.03em}
+.top span:last-child{font-size:.85rem;color:var(--muted);text-align:right}
+.lobby,.board{display:grid;justify-items:center;align-content:center;gap:clamp(.45rem,2vmin,1rem);min-height:calc(100dvh - 63px);text-align:center}
+.invite{display:grid;justify-items:center;gap:.35rem}
+.invite img{width:clamp(104px,26vmin,210px);border-radius:8px;background:white}
+.room-code{letter-spacing:.13em;color:var(--gold);font-weight:750}
+.seat{border:1px solid var(--edge);border-radius:9px;background:#102a23c9;min-width:7rem;padding:.6rem .8rem}
+.seat.current{border-color:var(--gold)}
+.seat strong,.seat small{display:block}
+.seat small{color:var(--muted);margin-top:.2rem}
+.piles{gap:clamp(.65rem,3vw,2rem)}
+.pile{display:grid;justify-items:center;gap:.28rem;color:var(--muted);font-size:.78rem}
+.card{position:relative;display:grid;place-items:center;flex:0 0 auto;width:var(--card-width,clamp(48px,13vmin,108px));aspect-ratio:5/7;min-height:0;padding:0;border-radius:9%;border:1px solid #d5bc87;color:#f1d6a1;background:repeating-linear-gradient(45deg,#254c42d9 0 5px,#335c4dde 5px 10px);font:clamp(1rem,6vmin,3rem) Georgia,serif;box-shadow:0 6px 10px #06161170;transition:transform .32s var(--ease),outline-color .25s;isolation:isolate}
+.card.face{background:#f5e6c9f5;color:#41332a}
+.card.empty{opacity:.3;background:transparent;box-shadow:none}
+.card.selected{transform:translateY(-6px);outline:2px solid var(--gold);z-index:1}
+.card.selected::after{content:"✓";position:absolute;top:3px;right:5px;font:700 .85rem system-ui}
+.card:disabled{opacity:1;cursor:default}
+.card-inner{display:grid;place-items:center;width:100%;height:100%;transform:perspective(380px) rotateX(3deg);animation:float 3.8s ease-in-out infinite;animation-delay:calc(var(--index,0) * -.22s)}
+@keyframes float{50%{transform:perspective(380px) translateY(-2px) rotateX(-3deg)}}
+.phone{display:grid;grid-template-rows:auto minmax(0,1fr) auto;height:calc(100dvh - max(12px,env(safe-area-inset-top)) - max(12px,env(safe-area-inset-bottom)));gap:.35rem}
+.stage{display:grid;place-content:center;justify-items:center;min-height:0;gap:clamp(3px,1vmin,10px);perspective:500px}
+.stage .piles{opacity:0;max-height:0;overflow:hidden;transform:translateY(-14px) scale(.9);transition:max-height .4s var(--ease),opacity .35s var(--ease),transform .4s var(--ease)}
+.phone.active .stage .piles{opacity:1;max-height:27dvh;overflow:visible;transform:none}
+.stage .piles .card{--card-width:clamp(30px,10dvh,68px)}
+.hand{width:min(92vw,68rem);display:grid;grid-template-columns:repeat(var(--cols),minmax(0,1fr));gap:clamp(3px,1.25vw,12px);justify-items:center;align-content:center;transition:transform .42s var(--ease)}
+.hand .card{--card-width:min(100%,var(--size));transition:width .42s var(--ease),transform .32s var(--ease);font-size:clamp(.8rem,6vmin,2.8rem)}
+.phone.active .hand{transform:translateY(3px)}
+.phone .actions{gap:.32rem}
+.phone .actions button{padding:.35rem .6rem}
+.status{text-align:center;margin:0;min-height:1.2em;font-size:.85rem}
+#connection{position:fixed;bottom:.4rem;left:50%;transform:translateX(-50%);margin:0;padding:.35rem .75rem;background:#281f16;color:#f4d8a8;border-radius:5px;z-index:5}
+.targets{display:flex;gap:.3rem;justify-content:center;flex-wrap:wrap}
+.targets button{padding:.3rem .45rem}
+.result-cards{display:flex;gap:4px;justify-content:center;margin-top:.35rem}
+.result-cards .card{--card-width:24px;font-size:.76rem}
+@media (orientation:landscape) and (max-height:430px){.phone{gap:2px}.phone .actions button,.phone .targets button{min-height:36px;font-size:.82rem}.phone .status{font-size:.73rem}.phone .pile{font-size:.65rem}.lobby,.board{min-height:calc(100dvh - 52px)}}
+@media (prefers-reduced-motion:reduce){*,*::after{animation-duration:.001s!important;transition-duration:.001s!important}}
+.top-controls{display:flex;gap:.4rem}
+.table-controls{position:absolute;top:3.5rem;right:1rem;max-width:min(25rem,90%);z-index:3;background:#122b25;border:1px solid var(--edge);padding:.75rem;border-radius:8px}
+.moving-card{position:fixed;pointer-events:none;z-index:4}
+.stage .piles [aria-label^="Draw"]{touch-action:none}

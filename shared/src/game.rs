@@ -48,3 +48,63 @@ impl DrawContext {
         Ok(())
     }
 }
+
+pub fn cards_match(ranks: &[u8]) -> bool {
+    ranks.len() >= 2 && ranks.iter().all(|rank| *rank == ranks[0])
+}
+
+pub fn card_power(rank: u8) -> Option<cabo_power::Power> {
+    use cabo_power::Power::*;
+    match rank {
+        7..=8 => Some(Peek),
+        9..=10 => Some(Spy),
+        11..=12 => Some(Swap),
+        _ => None,
+    }
+}
+
+pub mod cabo_power {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Power {
+        Peek,
+        Spy,
+        Swap,
+    }
+}
+
+pub fn round_points(hands: &[Vec<u8>], caller: Option<usize>) -> Vec<(u16, u16)> {
+    let totals: Vec<u16> = hands
+        .iter()
+        .map(|hand| hand.iter().map(|&rank| u16::from(rank)).sum())
+        .collect();
+    let kamikaze = hands.iter().position(|hand| {
+        hand.len() == 4
+            && hand.iter().filter(|&&rank| rank == 12).count() == 2
+            && hand.iter().filter(|&&rank| rank == 13).count() == 2
+    });
+    let lowest = totals.iter().copied().min().unwrap_or_default();
+    totals
+        .into_iter()
+        .enumerate()
+        .map(|(index, total)| {
+            let points = match kamikaze {
+                Some(winner) => {
+                    if winner == index {
+                        0
+                    } else {
+                        50
+                    }
+                }
+                None if caller == Some(index) => {
+                    if total == lowest {
+                        0
+                    } else {
+                        total + 10
+                    }
+                }
+                None => total,
+            };
+            (total, points)
+        })
+        .collect()
+}

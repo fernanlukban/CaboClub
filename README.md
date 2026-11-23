@@ -1,13 +1,13 @@
 # Cabo Club
 
-Cabo Club is a Rust web app for playing Cabo with friends. The Bevy browser demo and Axum hosting scaffold are in place. See [SPEC.md](SPEC.md) for the multiplayer milestones and the full-snapshot and action contract shared by browser and future native clients.
+Cabo Club is a Rust web app for playing Cabo with friends. The Bevy browser client and Axum server support private in-memory rooms and tabletop play. See [SPEC.md](SPEC.md) for the multiplayer milestones and the full-snapshot and action contract shared by browser and future native clients.
 
-[Tabletop mode](SPEC.md#tabletop-mode) is planned for iPad room creation and resume, QR joins, and private hands on landscape phones.
+[Tabletop mode](SPEC.md#tabletop-mode) supports iPad room creation and resume, QR joins, and private hands on landscape phones.
 
 | Crate | Responsibility |
 | --- | --- |
 | `app/` | Bevy WebAssembly client |
-| `server/` | Axum HTTP server, static hosting, and future room and session management |
+| `server/` | Axum HTTP server, static hosting, and room and session management |
 | `shared/` | Pure Rust game and protocol code for both targets |
 
 ## Develop locally
@@ -19,7 +19,16 @@ rustup target add wasm32-unknown-unknown
 cargo install trunk --locked --version 0.21.14
 ```
 
-For a fast client preview, run `cd app && trunk serve`. For same-origin hosting, run `(cd app && trunk build)` from the repository root, then run `cargo run -p cabo-server` and open http://localhost:8080. Check `/health` for server readiness.
+Build the client and run the same-origin server from the repository root.
+
+```sh
+(cd app && trunk build --locked)
+cargo run --locked -p cabo-server
+```
+
+Open http://localhost:8080/?board on the tabletop device. Create a room and open its invite in two independent browser sessions. Once both players join, deal cards, have each player reveal and confirm any two cards, then start play from the board. For physical phones, use the deployed URL or the server machine's reachable LAN address instead of localhost.
+
+Rooms live in memory. A restart ends active games. Check `/health` for server readiness.
 
 ```sh
 cargo fmt --all -- --check

@@ -73,9 +73,9 @@ Create, join, load or resume, poll, and authenticated command responses return a
 | `protocolVersion`, `roomId`, `revision` | Wire compatibility, room instance identity, and a monotonically increasing room revision |
 | `roomCode`, `youSeatId`, `hostSeatId` | Invite code, requesting seat, and host |
 | `phase`, `round`, `turnSeatId` | Lobby, initial preview, ready to start, active round, round results, or game over, plus the current turn when applicable |
-| `setup` | Deal identifier and per-seat readiness during setup. Only the requesting seat sees its own preview values while revealed. |
-| `players`, `table` | Ordered seats, scores, card slots and visible values, deck count, and discard top |
-| `pendingMove`, `finalTurns`, `results` | Player-visible draw or power state, Cabo caller and remaining turns, and round or game results as applicable |
+| `dealId` and player `ready` | Deal identifier and per-seat readiness during setup. Only the requesting seat sees its own preview values while revealed. |
+| `players`, `deckCount`, `discardTop` | Ordered seats, scores, card slots and visible values, deck count, and discard top |
+| `incoming`, `finalTurns`, `results` | Player-visible draw or power state, Cabo caller and remaining turns, and round or game results as applicable |
 | `availableActions` | Actions this seat can submit at this revision, including the choices each action accepts |
 
 Project the authoritative state into a distinct per-seat response type. Include hidden card slots with opaque references so clients can render card backs and select targets where allowed. Reveal only public values and values the requesting seat is entitled to see. Keep deck order, private card values, and seat credentials out of the snapshot. Action descriptors must also preserve hidden information. Send private snapshots with `Cache-Control: no-store`.
@@ -93,7 +93,7 @@ Use stable, tagged action kinds and typed parameters. Each descriptor carries an
 | `revealInitialCards` | Current deal, with exactly two distinct slot references from the server-provided list of the requesting seat's four starting slots. |
 | `confirmInitialLook` | Current deal. The requesting seat must already have revealed a pair. |
 | `beginPlay` | Current deal. Available to the paired board and host only after all seats confirm. |
-| `draw` | Currently available piles, such as `deck` or `discard`. |
+| `drawDeck`, `drawDiscard` | No parameters. Each appears when the corresponding pile can be taken. |
 | `discardDrawn`, `useDrawnPower`, `callCabo` | No parameters. For a power, include the power kind visible to the acting player. |
 | `discardHandCard` | One selectable existing hand slot to trade for the current incoming card. |
 | `callMatch` | Selectable own slots, minimum of two, maximum set by the current hand and game rules, and any required placement choice for a failed match. Offer before a draw if the discard top is available, or while resolving an incoming card. |
@@ -102,6 +102,16 @@ Use stable, tagged action kinds and typed parameters. Each descriptor carries an
 | `swap` | Selectable own slots and opponent slots, with explicit pair constraints if needed. |
 
 Create room, join room, and resume session are entry flows outside the in-room catalog. A seat with no available commands receives an empty array. For a match, list selectable slots and count constraints without enumerating matching sets. The server resolves the outcome using hidden card values. Clients can choose their own presentation for waiting and unsupported actions. Unknown action kinds must never be submitted by an older client.
+
+### HTTP endpoints
+
+| Request | Result |
+| --- | --- |
+| `POST /api/rooms` | Create with `{ "board": true }` or with `board: false` and a player `name`. Returns a credential and snapshot. |
+| `POST /api/rooms/{code}/join` | Join with a `name`. Returns a seat credential and snapshot. |
+| `POST /api/rooms/{code}/board` | Redeem a pairing `code`. Returns a board credential and snapshot. |
+| `GET /api/rooms/{code}` | Fetch a complete snapshot for the bearer credential. |
+| `POST /api/rooms/{code}/commands` | Send a command with the bearer credential. Returns `outcome`, `detail`, and the current snapshot. |
 
 ### Command and response flow
 
@@ -153,7 +163,7 @@ Use ease-in-out interpolation for camera zoom, camera translation, and card move
 
 ### Snapshot and permission boundary
 
-Use the same room and revision stream for both roles. Produce a complete public `BoardSnapshot` from the authoritative state on the server. Reuse public wire types from `shared/` and keep private seat fields out of the board response type. The board receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes public board reads and `beginPlay` for a ready deal. Authorize deal commands only for the board session that created the room. Bind every board command to the current room, phase, and session. Require a player session for every other game command. Board command responses use the public projection.
+Use the same room and revision stream for both roles. Project a complete public board snapshot from the authoritative state on the server. The shared JSON envelope identifies the board role and has null values for seat-specific fields. The board receives no private hand knowledge, private draw values or power results, seat credentials, or player action descriptors. Card values revealed publicly at scoring may appear on the board. The board credential authorizes public board reads and `beginPlay` for a ready deal. Authorize deal commands only for the board session that created the room. Bind every board command to the current room, phase, and session. Require a player session for every other game command. Board command responses use the public projection.
 
 Phones still receive their normal complete seat snapshots. Landscape layout is a presentation choice. Any Bevy or native client can render the board or a player hand from the relevant role's snapshot.
 
