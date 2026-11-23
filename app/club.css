@@ -37,7 +37,7 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 .card{position:relative;display:grid;place-items:center;flex:0 0 auto;width:var(--card-width,clamp(48px,13vmin,108px));aspect-ratio:5/7;min-height:0;padding:0;border-radius:9%;border:1px solid #d5bc87;color:#f1d6a1;background:repeating-linear-gradient(45deg,#254c42d9 0 5px,#335c4dde 5px 10px);font:clamp(1rem,6vmin,3rem) Georgia,serif;box-shadow:0 6px 10px #06161170;transition:transform .32s var(--ease),outline-color .25s;isolation:isolate}
 .card.face{background:#f5e6c9f5;color:#41332a}
 .card.empty{opacity:.3;background:transparent;box-shadow:none}
-.card.selected{transform:translateY(-6px);outline:2px solid var(--gold);z-index:1}
+.card.selected{transform:translateY(-14px);outline:2px solid var(--gold);z-index:1}
 .card.selected::after{content:"✓";position:absolute;top:3px;right:5px;font:700 .85rem system-ui}
 .card:disabled{opacity:1;cursor:default}
 .card-inner{display:grid;place-items:center;width:100%;height:100%;transform:perspective(380px) rotateX(3deg);animation:float 3.8s ease-in-out infinite;animation-delay:calc(var(--index,0) * -.22s)}
@@ -153,7 +153,10 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 
 .mini-tabletop .tabletop-hand .card.selected {
   outline: 2px solid var(--gold);
-  transform: translateY(-2px);
+}
+
+body:not(.bevy-scene) .mini-tabletop .tabletop-hand .card.selected {
+  transform: translateY(-8px);
 }
 
 .stage .mini-tabletop .piles {
@@ -167,6 +170,26 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 .visually-hidden{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 /* The 3D scene owns card pixels while the DOM keeps semantic controls. */
 .bevy-scene .card{opacity:0;pointer-events:none;animation:none}
-.bevy-scene .card:focus-visible{opacity:1;animation:none}
+.tabletop-caption{display:grid;justify-items:center;gap:.2rem}
+.tabletop-hud{display:grid;justify-items:center;gap:clamp(.3rem,1vmin,.7rem)}
+.bevy-scene :is(.tabletop-view,.result-view){display:flex;flex-direction:column;align-items:center;justify-content:space-between}
+.bevy-scene :is(.tabletop-view,.result-view) h2{font-size:clamp(1.1rem,3.3vmin,2.25rem)}
+.bevy-scene .stage{perspective:none}
+.bevy-scene .stage .piles,.bevy-scene .phone.active .hand,
+.bevy-scene .tabletop-seat .tabletop-seat-content{transform:none}
+.bevy-scene .tabletop-hand{container-type:normal}
+.bevy-scene .tabletop-seat .tabletop-seat-content,.bevy-scene .tabletop{border-color:transparent}
+.bevy-scene [data-scene-position]{position:fixed;left:var(--scene-x);top:var(--scene-y);transform:translate(-50%,-50%) rotate(var(--scene-angle));z-index:1}
+.bevy-scene .card[data-scene-position]{width:max(1px,var(--scene-width));height:max(1px,var(--scene-height));aspect-ratio:auto;transition:none}
+.bevy-scene .card[data-scene-position]:focus-visible{opacity:1;background:none;border-color:transparent;box-shadow:none;outline:2px solid var(--gold)}
+.bevy-scene .card[data-scene-position]:focus-visible > *,
+.bevy-scene .card[data-scene-position]:focus-visible::before,
+.bevy-scene .card[data-scene-position]:focus-visible::after{visibility:hidden}
+.bevy-scene .tabletop-caption{width:max-content;max-width:22vmin;z-index:2;pointer-events:none}
+.bevy-scene .mini-tabletop .tabletop-caption{max-width:28vw}
+.bevy-scene .tabletop-seat.current .tabletop-caption strong{color:var(--gold)}
+.bevy-scene .pile-caption{white-space:nowrap;pointer-events:none}
 .bevy-scene .tabletop,.bevy-scene .tabletop-seat-content,.bevy-scene .tabletop-seat.current .tabletop-seat-content{background:transparent}
 .bevy-scene .stage,.bevy-scene .tabletop{touch-action:none}
+
+.bevy-scene .result-view .seat{border-color:transparent;background:transparent}

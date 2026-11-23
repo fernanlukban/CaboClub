@@ -68,6 +68,8 @@ From the first deal through scoring, the discard pile always has a visible top. 
 
 Snapshots include `incomingSource` while a player holds a draw. The board can animate a back from the deck using this field. The deck card’s slot and rank remain private. The staged Spy target slot stays available to the board during the private look so its face-down card can travel and return. The private result remains actor-only.
 
+When a match takes the top discard, `cardTravel` identifies the public card, its originating pile, the receiving seat, and the resulting revision. All roles receive the latest match pickup receipt while the card stays with the receiving seat. Clients use its revision once, including if polling skips the exact resolution revision. The actor’s separate `matchOutcome` retains the move details. A private deck pickup has no `cardTravel` receipt carrying its slot or rank.
+
 ### Shared match reveal and public cards
 
 Accepting `callMatch` enters a server-owned match flip for 2.6 seconds. The turn and card locations stay fixed while the selected cards become public. The next server tick after the deadline resolves the match, applies any penalty, and advances or scores once. Repeat requests replay the original acceptance. Gameplay and host skip stay unavailable during the reveal.

@@ -46,7 +46,7 @@ pub struct Command {
     pub test_generation: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Choice {
     pub action: Action,
@@ -189,6 +189,21 @@ pub struct MatchOutcome {
     pub penalty_slot: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CardPile {
+    Discard,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardTravel {
+    pub revision: u64,
+    pub slot: u32,
+    pub from: CardPile,
+    pub to_seat_id: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -216,6 +231,8 @@ pub struct Snapshot {
     pub match_flip: Option<MatchFlip>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_outcome: Option<MatchOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_travel: Option<CardTravel>,
     pub test: Option<TestView>,
     pub cabo_caller: Option<u64>,
     pub final_turns: Vec<u64>,

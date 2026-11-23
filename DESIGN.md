@@ -75,6 +75,23 @@ Rust owns card selection in the preview. Bevy ray hits and accessible card contr
 
 The preview still uses the JavaScript session, polling, and status code. The preview allows one unresolved command. It can show local motion or conceal a closed opening look before confirmation. The same command ID and payload are retried after an ambiguous response, while the server remains authoritative for ranks, results, and follow-up actions. Full client ownership, motion parity, and real iPhone and iPad Safari validation are release gates.
 
+## Planning scene transitions
+
+A server snapshot determines the game state. A role-scoped receipt supplies facts a renderer cannot safely infer, such as the source pile when a match has already replaced the discard top. Bevy compares the previous and next scene targets and derives motion for stable card IDs. Animation completion advances presentation only. Server actions and turn changes remain independent of animation timing.
+
+| Transition | Presentation |
+| --- | --- |
+| Match takes the top discard | Move the identified card from the prior discard anchor to the receiving hand. Move surrendered cards to the discard pile. Keep a privately drawn replacement on its authorized path. |
+| Spy target changes from card 3 to card 2 | Return card 3 to its slot, then bring card 2 forward. Start from current transforms if the previous animation was interrupted. A rapid new selection replaces the queued approach. |
+| Confirmation, cancellation, or retry | Project the latest authorized snapshot. Keep stable slot IDs, discard canceled plans, and clear private faces immediately when permission ends. A duplicate receipt does not replay motion. |
+| Reconnect or reduced motion | Settle to current scene anchors without replaying skipped transitions. |
+
+The first implementation shares the match pickup receipt and sequences Spy retarget motion. For further transitions, define a small set of declarative operations such as move between anchors, return to slot, flip, and mark. Compose operations in parallel or in sequence. Give each operation a card identity, semantic start and end anchors, and an interruption rule. Use explicit transition receipts where comparing states loses provenance. Keep purely visual transitions local.
+
+The Bevy preview projects rendered card bounds, seat captions, and pile labels through the same camera. Browser controls follow those bounds, and picking intersects the current card surface during motion. Selected phone cards move upward and lift above the table. On the tabletop they also shift toward the center from the selected seat. Keep semantic HTML controls and live regions available for assistive technology and automated browsers. A canvas screenshot can verify visual placement and motion. Semantic locators can drive controls, inspect availability and status, and assert that the right action was submitted.
+
+Verification should include deterministic snapshot pairs and compare the planned operations before rendering. Cover match receipt privacy and deduplication, Spy return-before-approach, rapid retargeting, stale snapshots, and reduced motion. Then run browser tests with both keyboard and pointer on the same scene. Capture a few animation frames to check artwork and alignment. A standalone transition-plan test API remains follow-up work.
+
 ## Browser build and Railway delivery
 
 The Bevy client targets Rust's `wasm32-unknown-unknown`. Trunk builds `app/` and emits browser assets, including a hashed `*_bg.wasm` module and generated JavaScript bindings. The browser loads those bindings and runs Bevy through WebGL2.

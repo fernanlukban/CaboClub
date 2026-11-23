@@ -7,8 +7,11 @@ Cabo Club is a Rust web app for playing Cabo with friends. The Bevy browser clie
 | Crate | Responsibility |
 | --- | --- |
 | `app/` | Bevy WebAssembly client |
-| `server/` | Axum HTTP server, static hosting, and room and session management |
+| `server/` | Axum HTTP API, static hosting, and room storage |
+| `server/room/` | Authoritative room state, session authorization, gameplay, and scoped snapshots |
 | `shared/` | Pure Rust game and protocol code for both targets |
+
+See [Architecture](ARCHITECTURE.md) for ownership and dependency boundaries.
 
 ## Develop locally
 
@@ -36,7 +39,7 @@ In a TEST room, open **Game log** on the board or a player device, then tap **Co
 
 ```sh
 python3 scripts/check-game-log.py game-log.json
-cargo test -p cabo-server seeded_legal_turn_fuzz
+cargo test -p cabo-room seeded_legal_turn_fuzz
 ```
 
 The checker replays the public trace and reports the first broken invariant. Hidden hands and deck order are excluded, so the trace cannot recreate a normal game's concealed deal. The log retains the latest 1,024 events.
@@ -45,7 +48,7 @@ Rooms live in memory. A restart ends active games. Check `/health` for server re
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p cabo-shared -p cabo-server
+cargo test -p cabo-shared -p cabo-room -p cabo-server
 cargo check -p cabo-app --target wasm32-unknown-unknown
 ```
 

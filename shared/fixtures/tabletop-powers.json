@@ -103,6 +103,7 @@
       {"slot": 50, "rank": null, "faceUp": false},
       {"slot": 51, "rank": 2, "faceUp": true}
     ]}],
+    "cardTravel": {"revision": 43, "slot": 51, "from": "discard", "toSeatId": 2},
     "incoming": null,
     "availableActions": []
   },

@@ -8,7 +8,7 @@ axum = "0.8"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["fs"] }
 cabo-shared.workspace = true
+cabo-room = { path = "room" }
 serde = { version = "1", features = ["derive"] }
 rand = "0.9"
-uuid = { version = "1", features = ["v4"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
