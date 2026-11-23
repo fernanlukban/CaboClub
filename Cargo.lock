@@ -595,6 +595,7 @@ dependencies = [
  "bevy_light",
  "bevy_math",
  "bevy_mesh",
+ "bevy_pbr",
  "bevy_reflect",
  "bevy_render",
  "bevy_shader",
@@ -698,6 +699,7 @@ dependencies = [
  "bevy_gizmos",
  "bevy_image",
  "bevy_input",
+ "bevy_light",
  "bevy_math",
  "bevy_mesh",
  "bevy_pbr",
@@ -1316,6 +1318,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "cabo-shared",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "web-sys",
 ]

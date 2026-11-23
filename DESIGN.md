@@ -67,6 +67,12 @@ Bevy is the intended owner of the game scene and its motion. Model each card as 
 
 The current implementation is hybrid. The browser uses HTML/CSS for interactive card faces and Bevy for a WebAssembly scene with sprite shadows, camera scale, and eased scene motion. Moving card faces, flips, lighting, and picking into Bevy's scene is the rendering follow-up specified here.
 
+## Bevy 3D preview
+
+Add `?scene=3d` to the tabletop or phone URL to use the snapshot-driven 3D preview. The tabletop’s invite carries the same option to phones. Bevy renders the card meshes, backs, ranks, piles, face changes, and scene hit targets. The preview uses the same room protocol and assembles commands in Rust from the current action descriptors. The existing HTML client remains the default and provides semantic controls in the preview.
+
+Rust owns card selection in the preview. Bevy ray hits and accessible card controls use the same selection logic, and the HTML controls mirror the accepted selection. The preview still uses the JavaScript session, polling, and status code. The preview allows one unresolved command. It can show local motion or conceal a closed opening look before confirmation. The same command ID and payload are retried after an ambiguous response, while the server remains authoritative for ranks, results, and follow-up actions. Full client ownership, motion parity, and real iPhone and iPad Safari validation are release gates.
+
 ## Browser build and Railway delivery
 
 The Bevy client targets Rust's `wasm32-unknown-unknown`. Trunk builds `app/` and emits browser assets, including a hashed `*_bg.wasm` module and generated JavaScript bindings. The browser loads those bindings and runs Bevy through WebGL2.
