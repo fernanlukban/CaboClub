@@ -438,10 +438,12 @@ function powerToast() {
     }));
 }
 
-function tabletop(center) {
+function tabletop(center, miniature = false) {
   const targetChoice = snapshot.availableActions.find(choice=>choice.action==="stagePowerTarget");
+  const peekChoice = miniature && snapshot.availableActions.find(choice=>choice.action==="peek");
+  const ownChoice = miniature && snapshot.availableActions.find(choice=>choice.action==="selectPowerOwnCard");
   const activePlayer = snapshot.players.find(player=>player.seatId===snapshot.turnSeatId);
-  return node("div",{class:"tabletop"},...directions.map(direction=>{
+  return node("div",{class:`tabletop ${miniature?"mini-tabletop":""}`},...directions.map(direction=>{
     const player = snapshot.players.find(seat=>seat.direction===direction);
     const current = player && player.seatId===snapshot.turnSeatId;
     const hand = current && snapshot.incoming ? [...player.cards, snapshot.incoming] : player?.cards;
@@ -455,13 +457,16 @@ function tabletop(center) {
       node("div",{class:"tabletop-seat-content"},
         hand?.length?node("div",{class:"tabletop-hand",style:`--cards:${hand.length}`},
           ...hand.map((item,index)=>{
+            const action = [targetChoice,ownChoice,peekChoice].find(choice=>choice?.slots?.includes(item.slot));
+            const pick = action ? (action.action==="peek" ? ()=>toggle(item.slot) : ()=>submit(action,[item.slot])) : null;
+            const selected = snapshot.pendingPower?.targetSlot===item.slot
+              || (miniature && (snapshot.pendingPower?.ownSlot===item.slot || selection.includes(item.slot)));
             const lookedAt = player.openingLookSlots?.includes(item.slot);
             const label = `${player.name} · Card ${index+1}${item.rank===null?", face down":", rank "+item.rank}${lookedAt?", looked at during opening":""}`;
-            return card(item,index,targetChoice?.slots.includes(item.slot)?()=>submit(targetChoice,[item.slot]):null,
-              snapshot.pendingPower?.targetSlot===item.slot,label,lookedAt);
+            return card(item,index,pick,selected,label,lookedAt);
           })):null,
-        node("strong",{},player?.name ?? `${directionLabel(direction)} · Open seat`),
-        player?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null));
+        node("strong",{},player?.name ?? (miniature ? directionLabel(direction) : `${directionLabel(direction)} · Open seat`)),
+        player&&!miniature?node("small",{},`${roundStatus} · ${player.score} points${result?` · +${result.points} this round`:""}${snapshot.nextStarterSeatId===player.seatId?" · Starts next":""}`):null));
   }),node("div",{class:"tabletop-center"},center));
 }
 
@@ -505,8 +510,8 @@ function phone() {
   const cols = Math.max(1,Math.ceil(hand.length/rows));
   const size = active?`${Math.min(21,38/rows)}dvh`:`${Math.min(36,57/rows)}dvh`;
   const ownChoice = snapshot.availableActions.find(action=>action.action==="selectPowerOwnCard");
-  const targetChoice = snapshot.availableActions.find(action=>action.action==="stagePowerTarget");
-  const targets = new Set(targetChoice?.slots ?? []);
+  const mini = active && ["peekSelecting","peekViewing","spySelecting","spyReview","spyViewing",
+    "swapSelectingOpponent","swapReview"].includes(snapshot.pendingPower?.phase);
   const privateResult = powerToast();
   const opening = snapshot.availableActions.some(action=>action.action==="revealInitialCards");
   const prompt = opening?`Choose two cards · ${selection.length} of 2`:snapshot.availableActions.some(action=>action.action==="confirmInitialLook")?"Remember these two cards":powerPrompt() || status();
@@ -517,14 +522,13 @@ function phone() {
     ? snapshot.players.find(player=>player.seatId===flip.actorSeatId) : null;
   const revealedCards = revealing?.cards.filter(item=>flip.slots.includes(item.slot));
   return node("section",{class:`phone ${active?"active":""}`},top(tableActions),
-    node("div",{class:"stage"},piles(active),
+    node("div",{class:`stage ${mini?"has-mini-tabletop":""}`},piles(active),
       revealedCards?.length ? node("div",{class:"match-reveal","aria-label":`${revealing.name}’s match cards`},
         ...revealedCards.map(item=>card(item,revealing.cards.indexOf(item)))) : null,
       node("div",{class:"hand",style:`--cols:${cols};--size:${size}`},...hand.map((item,index)=>card(item,index,ownChoice?.slots.includes(item.slot)?()=>submit(ownChoice,[item.slot]):
         (!snapshot.pendingPower || snapshot.pendingPower.phase==="peekSelecting")&&selectableSlots.has(item.slot)?()=>toggle(item.slot):null,
         snapshot.pendingPower?.ownSlot===item.slot||selection.includes(item.slot)))),
-      targets.size?node("div",{class:"targets"},...snapshot.players.filter(p=>p.seatId!==me.seatId).flatMap(p=>
-        p.cards.map((item,index)=>targets.has(item.slot)?button(`${p.name} · Card ${index+1}`,()=>submit(targetChoice,[item.slot]),snapshot.pendingPower?.targetSlot===item.slot,busy):null))):null),
+      mini?tabletop(piles(),true):null),
     node("footer",{},node("p",{class:"status",role:"status"},notice||prompt),
       !notice&&snapshot.message.endsWith("’s turn was skipped.")?node("p",{role:"status"},snapshot.message):null,
       actionStrip(choice=>!playingActions.has(choice.action)),
@@ -583,8 +587,9 @@ function render() {
     previousStage.querySelector(".match-reveal")?.remove();
     const reveal = nextStage.querySelector(".match-reveal");
     if (reveal) previousHand.before(reveal);
-    previousStage.querySelector(".targets")?.remove();
-    if (nextStage.querySelector(".targets")) previousStage.append(nextStage.querySelector(".targets"));
+    previousStage.className = nextStage.className;
+    previousStage.querySelector(".mini-tabletop")?.remove();
+    if (nextStage.querySelector(".mini-tabletop")) previousStage.append(nextStage.querySelector(".mini-tabletop"));
     previous.querySelector("footer").replaceWith(next.querySelector("footer"));
     previous.querySelector("header").replaceWith(next.querySelector("header"));
     previous.querySelector(".table-controls")?.remove();

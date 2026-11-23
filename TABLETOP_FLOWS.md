@@ -8,7 +8,7 @@ Product and protocol spec for [Cabo Club](SPEC.md). Spy and Swap use shared targ
 | --- | --- | --- | --- |
 | Activate | Tap **Use Spy** or **Use Swap** after a qualifying draw. | Show which player is choosing. | Continue to show the private hand and current turn. |
 | Select own card for Swap | Tap one own card. Show **Choose a card to give** until selected. | Show **Waiting for [name] to choose their card**. | Keep normal waiting view. |
-| Select opponent card | Show **Choose an opponent card** and highlight eligible slots. The player can tap here or use the iPad. | Enable only eligible opponent card backs. Tapping one highlights the same slot on both devices. | Keep normal waiting view. |
+| Select opponent card | Show **Choose an opponent card** and highlight eligible slots. The player can tap the same compass seat on the phone’s mini table or use the iPad. | Enable only eligible opponent card backs. Tapping one highlights the same slot on both devices. | Keep normal waiting view. |
 | Review | Show **Confirm Spy** or **Confirm Swap**. Allow a new target or **Change my card** for Swap. | Show **Waiting for [name] to confirm**. | Keep normal waiting view. |
 | Spy result | Show a private toast with the rank, for example **Spy confirmed · Bea’s card is 7**. Tap **Done** to hide it and pass the turn. | Show **[Name] is finishing their turn**. Clear target highlights when the reveal begins. | See waiting state only. |
 | Swap result | Show **Swap complete** as a private toast. Animate the two cards trading places without showing ranks. | Animate the public card backs moving and highlight the next turn. | The affected player sees their hand update without revealing either rank. |

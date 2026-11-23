@@ -51,7 +51,7 @@ A reconnect before **I’ve looked** restores the same private pair. After confi
 | Take the top discard | Tap the discard pile. Animate the card into a temporary hand slot. Tap an existing hand card and choose to discard it, or select multiple hand cards and call a match. |
 | Match first | Tap two or more existing hand cards and choose **Call match**. On success, animate those cards onto the discard pile and take the card that was on top before the move. |
 | Draw first, then match | Show the drawn card for comparison. Keep the drawn card if the selected hand cards match, and animate every matched card onto the discard pile. Leave the rank comparison and memory work to the player. |
-| Use a power | Present selectable targets from the current action descriptor. Privately reveal an authorized Peek or Spy result, or show the swap motion for a confirmed Swap. |
+| Use a power | Show a compact compass table on the active phone, with occupied seats in the same positions as the iPad. Keep phone labels upright and enable only the cards the current action allows. Privately reveal an authorized Peek or Spy result, or show the swap motion for a confirmed Swap. |
 | End a turn | Ease back toward the waiting composition and hand focus. Show the next player on the board. |
 
 The action strip offers accessible tap controls for each gesture. Treat a tap, drag, or button press as the same gameplay command when it expresses the same action and parameters. The client sends intent and animates the accepted result from the server. It can highlight a selection immediately.

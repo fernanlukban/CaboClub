@@ -54,11 +54,9 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 .phone .actions button{padding:.35rem .6rem}
 .status{text-align:center;margin:0;min-height:1.2em;font-size:.85rem}
 #connection{position:fixed;bottom:.4rem;left:50%;transform:translateX(-50%);margin:0;padding:.35rem .75rem;background:#281f16;color:#f4d8a8;border-radius:5px;z-index:5}
-.targets{display:flex;gap:.3rem;justify-content:center;flex-wrap:wrap}
-.targets button{padding:.3rem .45rem}
 .result-cards{display:flex;gap:4px;justify-content:center;margin-top:.35rem}
 .result-cards .card{--card-width:24px;font-size:.76rem}
-@media (orientation:landscape) and (max-height:430px){.phone{gap:2px}.phone .actions button,.phone .targets button{min-height:36px;font-size:.82rem}.phone .status{font-size:.73rem}.phone .pile{font-size:.65rem}.lobby,.board{min-height:calc(100dvh - 52px)}}
+@media (orientation:landscape) and (max-height:430px){.phone{gap:2px}.phone .actions button{min-height:36px;font-size:.82rem}.phone .status{font-size:.73rem}.phone .pile{font-size:.65rem}.lobby,.board{min-height:calc(100dvh - 52px)}}
 @media (prefers-reduced-motion:reduce){*,*::after{animation-duration:.001s!important;transition-duration:.001s!important}}
 .top-controls{display:flex;gap:.4rem}
 .table-controls{position:absolute;top:3.5rem;right:1rem;max-width:min(25rem,90%);z-index:3;background:#122b25;border:1px solid var(--edge);padding:.75rem;border-radius:8px}
@@ -119,3 +117,49 @@ input{background:#102a24;border:1px solid var(--edge);border-radius:7px;color:va
 
 .card.opening-looked{outline:2px solid var(--gold);outline-offset:2px}
 .card.opening-looked::after{content:"✓";position:absolute;right:2px;bottom:2px;color:var(--gold);font:700 .6rem system-ui}
+.stage.has-mini-tabletop > .piles,
+.stage.has-mini-tabletop > .hand {
+  display: none;
+}
+
+.stage.has-mini-tabletop {
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mini-tabletop {
+  --side-length: auto;
+  width: min(100%, 34rem);
+  padding: .3rem;
+  gap: .25rem;
+  grid-template-rows: auto auto auto;
+}
+
+.mini-tabletop .tabletop-seat .tabletop-seat-content {
+  width: 100%;
+  transform: none;
+  padding: .2rem .28rem;
+  font-size: .72rem;
+  gap: .1rem;
+}
+
+.mini-tabletop .tabletop-hand .card {
+  --card-width: min(clamp(18px, 8dvh, 36px), calc(100cqw / var(--cards) - var(--hand-gap)));
+}
+
+.mini-tabletop .tabletop-hand .card:enabled {
+  outline: 1px dashed var(--gold);
+}
+
+.mini-tabletop .tabletop-hand .card.selected {
+  outline: 2px solid var(--gold);
+  transform: translateY(-2px);
+}
+
+.stage .mini-tabletop .piles {
+  gap: .35rem;
+}
+
+.stage .mini-tabletop .piles .card {
+  --card-width: clamp(22px, 7dvh, 34px);
+}
